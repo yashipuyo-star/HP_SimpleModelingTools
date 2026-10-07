@@ -2,7 +2,7 @@
 bl_info = {
     "name": "HP Section Mini Editor",
     "author": "OpenAI + yashi",
-    "version": (0, 27, 0),
+    "version": (0, 27, 1),
     "blender": (4, 3, 0),
     "location": "3D View > Sidebar > HP Tools",
     "description": "Two fully interactive section views with translucent world-plane editing.",
@@ -10,6 +10,7 @@ bl_info = {
 }
 
 import bpy
+from .HP_Section_Preview import SectionPreviewMixin
 import time
 import traceback
 from bpy.props import EnumProperty, BoolProperty
@@ -1336,7 +1337,7 @@ _hp_sample = _sample_polyline_2d
 _hp_average = _moving_average_2d
 _hp_stabilize = _stabilize_2d
 
-class HP_OT_section_mini_editor(bpy.types.Operator):
+class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
     _hp_is_curve = False
 
     def _hp_follow_sides(self, settings):
@@ -1848,11 +1849,11 @@ class HP_OT_section_mini_editor(bpy.types.Operator):
     detached: BoolProperty(default=False, options={'SKIP_SAVE'})
 
     def _layout_panels(self, context):
-        if self._dragging or self._secondary_dragging or self._brush_mode or self._pen_drawing or self._secondary_pen_drawing or self._transform_mode or self._secondary_transform_mode:
+        if self._preview_state or self._dragging or self._secondary_dragging or self._brush_mode or self._pen_drawing or self._secondary_pen_drawing or self._transform_mode or self._secondary_transform_mode:
             return
         wanted_w, wanted_h = self._panel_sizes[self._panel_stage]
         width = max(160, min(wanted_w, (context.region.width - 48) / 2))
-        height = max(140, min(wanted_h, context.region.height * (0.34 if self.detached else 0.42)))
+        height = max(140, min(wanted_h, context.region.height * (0.42 if self.detached else 0.48)))
         x = 18 if self.detached else max(18, context.region.width - width * 2 - 30)
         y = 18 if self.detached else max(18, context.region.height - height - 18)
         layout = (width, height, x, y)
@@ -1944,13 +1945,14 @@ class HP_OT_section_mini_editor(bpy.types.Operator):
         self._view_zoom_max = 5.0
 
         self._panel_sizes = list(WINDOW_STAGES)
-        self._panel_stage = 0
+        self._panel_stage = 1
         self._panel_w = self._panel_sizes[self._panel_stage][0]
         self._panel_h = self._panel_sizes[self._panel_stage][1]
 
         self._panel_x = 18
         self._panel_y = 18
         self._idle = True
+        self._preview_state = None
         self._hp_menu = None
         self._preview_filter_backup = {}
         self._preview_overlay_backup = None
@@ -6310,9 +6312,13 @@ class HP_OT_section_mini_editor(bpy.types.Operator):
         if context.area.type != 'VIEW_3D':
             return {'PASS_THROUGH'}
 
+        if self._preview_state and not self._target_available(context):
+            self._preview_finish_edit(context, cancel=True)
+            self._idle = True
+
         if event.type == 'TIMER':
             self._layout_panels(context)
-            busy = (self._dragging or self._box_dragging or self._brush_mode
+            busy = (self._preview_state or self._dragging or self._box_dragging or self._brush_mode
                     or self._pen_mode or self._secondary_pen_mode
                     or self._transform_mode or self._secondary_transform_mode
                     or self._hp_menu is not None)
@@ -6360,6 +6366,10 @@ class HP_OT_section_mini_editor(bpy.types.Operator):
         in_panels = (self._inside_panel(mx, my) or self._inside_secondary(mx, my)
                      or self._inside_primary_header(mx, my)
                      or self._inside_secondary_header(mx, my))
+        if not active_gesture:
+            preview_result = self._preview_event(context, event, in_panels)
+            if preview_result is not None:
+                return preview_result
         if event.type != 'TIMER' and not in_panels and not active_gesture:
             return {'PASS_THROUGH'}
 
@@ -7760,7 +7770,16 @@ class HP_OT_section_mini_editor(bpy.types.Operator):
         center = sum(points, Vector()) / len(points)
         rv3d = context.space_data.region_3d
         rv3d.view_location = center
-        rv3d.view_distance = max(0.1, max((p - center).length for p in points) * 3.5)
+        bottom = self._panel_y + self._panel_h + 24
+        available = max(180, context.region.height - bottom - 40)
+        rv3d.view_distance = max(0.1, max((p - center).length for p in points) * 2.2 * context.region.height / available)
+        rv3d.update()
+        # Frame the chain in the usable 3D area above the two panels.
+        from bpy_extras.view3d_utils import region_2d_to_location_3d
+        target = Vector((context.region.width * 0.5, bottom + available * 0.5))
+        at_target = region_2d_to_location_3d(context.region, rv3d, target, center)
+        rv3d.view_location += center - at_target
+        rv3d.update()
 
     def _draw_point_labels(self):
         context = bpy.context
@@ -8370,6 +8389,7 @@ class HP_OT_section_mini_editor(bpy.types.Operator):
 
         gpu.state.blend_set('ALPHA')
 
+        self._draw_preview_hud()
         self._hp_draw_follow_ranges(bpy.context)
 
         a_h = self._primary_height()
@@ -8634,6 +8654,8 @@ class HP_OT_section_mini_editor(bpy.types.Operator):
                 self._hp_menu = None
         self._hp_confirm_hold = None
 
+        if getattr(self, '_preview_state', None):
+            self._preview_finish_edit(context, cancel=True)
         self._finished = True
 
         labels = getattr(self, '_handle_labels', None)

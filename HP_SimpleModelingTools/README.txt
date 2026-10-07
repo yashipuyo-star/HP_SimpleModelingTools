@@ -1,4 +1,12 @@
-HP Simple Modeling Tools / Path Pen v0.27.0
+HP Simple Modeling Tools / Path Pen v0.27.1
+
+SECTION WINDOW UPDATE v0.27.1
+- Section panels now start at the medium 480x360 size, fitted to the viewport.
+- The separate 3D view supports shared point selection, click-drag / box,
+  G/S/R transforms with world X/Y/Z constraints, E brushes, and F pen fitting.
+- Enter/LMB commits transforms; Esc/RMB cancels; Ctrl+Z shares the section undo.
+- Pen fitting preserves each point's view depth. E can also adjust drawn pen
+  strokes before F/Enter commits them. Native topology edits use the A/B panels.
 
 SECTION WINDOW UPDATE v0.27.0
 - Automatic section/curve editor startup is disabled to preserve Blender's

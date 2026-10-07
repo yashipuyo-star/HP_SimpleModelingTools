@@ -201,6 +201,121 @@ class EditorTests(unittest.TestCase):
         editor._finish_pen_smooth_drag(bpy.context,cancel=True)
         self.assertEqual(editor._pen_stroke,raw)
 
+    def open_preview(self):
+        editor = self.open_inline()
+        editor.detached = True
+        return editor
+
+    def test_default_panel_size_is_medium(self):
+        editor = self.open_inline()
+        self.assertEqual(editor._panel_stage,1)
+        self.assertEqual(editor._panel_sizes[1],(480,360))
+
+    def test_preview_click_selects_shared_point_without_undo_noise(self):
+        editor = self.open_preview()
+        point = editor._preview_points(bpy.context)[0]
+        self.assertIsNotNone(point)
+        editor._preview_event(bpy.context,event('LEFTMOUSE',x=point.x,y=point.y),False)
+        self.assertEqual(editor._selected,{0})
+        editor._preview_event(bpy.context,event('LEFTMOUSE','RELEASE',x=point.x,y=point.y),False)
+        self.assertIsNone(editor._preview_state)
+        self.assertEqual(len(editor._history),0)
+
+    def test_preview_move_commit_and_undo_preserve_unselected_points(self):
+        editor = self.open_preview()
+        editor._selected = {0}
+        before = [v.co.copy() for v in editor._bm.verts]
+        editor._preview_event(bpy.context,event('G',x=600,y=600),False)
+        editor._preview_event(bpy.context,event('MOUSEMOVE',x=620,y=615),False)
+        self.assertGreater((editor._bm.verts[editor._ordered[0]].co-before[editor._ordered[0]]).length,1e-5)
+        for i in editor._ordered[1:]: self.assertEqual(editor._bm.verts[i].co,before[i])
+        editor._preview_event(bpy.context,event('RET',x=620,y=615),False)
+        editor._preview_event(bpy.context,event('Z',ctrl=True),False)
+        for i,co in enumerate(before):self.assertLess((editor._bm.verts[i].co-co).length,1e-6)
+
+    def test_preview_axis_move_and_cancel(self):
+        editor = self.open_preview()
+        editor._selected = {0,1}
+        before = [v.co.copy() for v in editor._bm.verts]
+        editor._preview_event(bpy.context,event('G',x=600,y=600),False)
+        editor._preview_event(bpy.context,event('X',x=600,y=600),False)
+        editor._preview_event(bpy.context,event('MOUSEMOVE',x=625,y=600),False)
+        for i in editor._selected:
+            co=editor._bm.verts[editor._ordered[i]].co
+            self.assertAlmostEqual(co.y,before[editor._ordered[i]].y,places=5)
+            self.assertAlmostEqual(co.z,before[editor._ordered[i]].z,places=5)
+        editor._preview_event(bpy.context,event('ESC'),False)
+        for i,co in enumerate(before):self.assertLess((editor._bm.verts[i].co-co).length,1e-6)
+        self.assertEqual(len(editor._history),0)
+
+    def test_preview_scale_and_rotate(self):
+        editor = self.open_preview()
+        editor._selected = {0,2}
+        a,b=[editor._bm.verts[editor._ordered[i]].co.copy() for i in (0,2)]
+        editor._preview_event(bpy.context,event('S',x=600,y=600),False)
+        editor._preview_event(bpy.context,event('RET',x=640,y=600),False)
+        c,d=[editor._bm.verts[editor._ordered[i]].co.copy() for i in (0,2)]
+        self.assertAlmostEqual((c-d).length,(a-b).length*math.exp(.4),places=5)
+        editor._preview_event(bpy.context,event('R',x=600,y=600),False)
+        editor._preview_event(bpy.context,event('Z',x=600,y=600),False)
+        editor._preview_event(bpy.context,event('RET',x=600,y=640),False)
+        e,f=[editor._bm.verts[editor._ordered[i]].co.copy() for i in (0,2)]
+        self.assertAlmostEqual((e-f).length,(c-d).length,places=5)
+        self.assertGreater((e-c).length,1e-4)
+
+    def test_preview_brush_cancel_restores_mesh(self):
+        editor = self.open_preview()
+        editor._selected = {0}
+        point = editor._preview_points(bpy.context)[0]
+        before=[v.co.copy() for v in editor._bm.verts]
+        editor._preview_event(bpy.context,event('E',x=point.x,y=point.y),False)
+        editor._preview_event(bpy.context,event('MOUSEMOVE',x=point.x+20,y=point.y),False)
+        self.assertGreater((editor._bm.verts[editor._ordered[0]].co-before[editor._ordered[0]]).length,1e-5)
+        editor._preview_event(bpy.context,event('RIGHTMOUSE'),False)
+        for i,co in enumerate(before):self.assertLess((editor._bm.verts[i].co-co).length,1e-6)
+
+    def test_preview_box_selection_matches_projected_points(self):
+        editor = self.open_preview()
+        point=editor._preview_points(bpy.context)[0]
+        a,b=point-Vector((15,15)),point+Vector((15,15))
+        editor._preview_state=dict(mode='BOX',start=a,end=a,additive=False)
+        editor._preview_event(bpy.context,event('LEFTMOUSE','RELEASE',x=b.x,y=b.y),False)
+        expected={i for i,p in enumerate(editor._preview_points(bpy.context))
+                  if p is not None and a.x<=p.x<=b.x and a.y<=p.y<=b.y}
+        self.assertEqual(editor._selected,expected)
+        self.assertIn(0,expected)
+
+    def test_preview_pen_brush_cancel_preserves_uncommitted_line(self):
+        editor = self.open_preview()
+        raw=[Vector((500+i*5,500)) for i in range(10)]
+        editor._preview_state=dict(mode='PEN',stroke=[p.copy() for p in raw],drawing=False)
+        editor._preview_event(bpy.context,event('E',x=500,y=500),False)
+        editor._preview_event(bpy.context,event('MOUSEMOVE',x=520,y=500),False)
+        self.assertNotEqual(editor._preview_state['stroke'],raw)
+        editor._preview_event(bpy.context,event('ESC'),False)
+        self.assertEqual(editor._preview_state['stroke'],raw)
+        self.assertFalse(editor._preview_state['brush'])
+        self.assertEqual(editor._preview_state['mode'],'PEN')
+
+    def test_preview_pen_changes_mesh_only_on_confirmation(self):
+        editor = self.open_preview()
+        editor._selected = {0,1,2}
+        points=editor._preview_points(bpy.context)
+        order,_=editor._pen_selected_order()
+        start,end=points[order[0]],points[order[-1]]
+        before=[v.co.copy() for v in editor._bm.verts]
+        editor._preview_event(bpy.context,event('F'),False)
+        editor._preview_event(bpy.context,event('LEFTMOUSE',x=start.x,y=start.y+30),False)
+        mid=(start+end)/2
+        editor._preview_event(bpy.context,event('MOUSEMOVE',x=mid.x,y=mid.y+30),False)
+        editor._preview_event(bpy.context,event('LEFTMOUSE','RELEASE',x=end.x,y=end.y+30),False)
+        self.assertEqual([v.co.copy() for v in editor._bm.verts],before)
+        editor._preview_event(bpy.context,event('RET'),False)
+        self.assertIsNone(editor._preview_state)
+        self.assertTrue(any((v.co-c).length>1e-5 for v,c in zip(editor._bm.verts,before)))
+        editor._preview_event(bpy.context,event('Z',ctrl=True),False)
+        for i,co in enumerate(before):self.assertLess((editor._bm.verts[i].co-co).length,1e-6)
+
     @unittest.skipIf(bpy.app.background, 'Requires an actual window manager')
     def test_detached_window_and_visibility_restoration(self):
         previous = {w.as_pointer() for w in bpy.context.window_manager.windows}

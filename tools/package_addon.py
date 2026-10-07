@@ -12,7 +12,7 @@ output = root / f'HP_SimpleModelingTools_PathPen_v{version}_SectionWindow.zip'
 files = sorted(list(package.glob('*.py')) + [package / 'README.txt'])
 with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
     for path in files:
-        info = zipfile.ZipInfo(str(path.relative_to(root)), date_time=(2026,10,7,0,0,0))
+        info = zipfile.ZipInfo(str(path.relative_to(root)), date_time=(2026,10,8,0,0,0))
         info.external_attr = 0o644 << 16
         info.compress_type = zipfile.ZIP_DEFLATED
         archive.writestr(info,path.read_bytes())
