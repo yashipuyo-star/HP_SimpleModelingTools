@@ -18,7 +18,6 @@ class ThirdPanel:
         self.signature=None
         self.offscreen=None
         self.scene_rendered=False
-        self.detached_scene=None
         self.button_pressed=False
         self.rect=(0,0,1,1)
 
@@ -43,7 +42,7 @@ class ThirdPanel:
 
     def scene_view(self, editor):
         if editor.detached:
-            return editor.preview_only if self.detached_scene is None else self.detached_scene
+            return editor.preview_only
         return False
 
     def buttons(self, editor):
@@ -127,8 +126,9 @@ class ThirdPanel:
                     bpy.ops.hp.section_window(full_scene=False)
                     return {'FINISHED'} if editor._finished else {'RUNNING_MODAL'}
                 elif button in {'scene','section'}:
-                    self.detached_scene=button=='scene'
-                    self.fit(editor,whole_object=self.detached_scene,reset_rotation=False)
+                    self.button_pressed=False
+                    bpy.ops.hp.section_window(full_scene=button=='section')
+                    return {'FINISHED'} if editor._finished else {'RUNNING_MODAL'}
                 return {'RUNNING_MODAL'}
         if not active and event.type=='MIDDLEMOUSE' and event.value=='PRESS':
             self.navigation=mouse
@@ -171,30 +171,25 @@ class ThirdPanel:
         x,y,w,h=self.rect
         scene_view=self.scene_view(editor)
         gpu.state.blend_set('ALPHA')
-        editor._draw_rect(x,y,w,h,(.025,.025,.025,.82))
+        editor._draw_rect(x,y,w,h,(.025,.025,.025,.62))
         if scene_view:
             self.draw_scene(editor,context)
-        step=24
-        for xx in range(int(x),int(x+w),step):
-            editor._draw_line([Vector((xx,y)),Vector((xx,y+h))],(.3,.3,.3,.25),1)
-        for yy in range(int(y),int(y+h),step):
-            editor._draw_line([Vector((x,yy)),Vector((x+w,yy))],(.3,.3,.3,.25),1)
         editor._draw_rect_outline(x,y,x+w,y+h,(.65,.65,.65,.42))
         if not editor._idle and editor._target_available(context):
             points=[self.project(editor._obj.matrix_world @ editor._bm.verts[i].co) for i in editor._ordered]
             previous=None
             for point in points+([points[0]] if editor._closed else []):
                 if point is not None and previous is not None:
-                    editor._draw_line([previous,point],(.3,.7,1,1),2)
+                    editor._draw_line([previous,point],(.50,.76,1,1),2)
                 previous=point
-            editor._draw_points([p for p in points if p is not None],(.3,.7,1,1),5)
+            editor._draw_points([p for p in points if p is not None],(.50,.76,1,1),5)
             for i in sorted(editor._selected):
                 if i<len(points) and points[i] is not None:
                     p=points[i]
                     editor._draw_points([p],(1,.55,.08,1),8)
                     blf.size(0,12);blf.color(0,1,.65,.15,1);blf.position(0,p.x+7,p.y+7,0);blf.draw(0,str(i+1))
-        editor._draw_rect(x,y+h-28,w,28,(.085,.085,.085,.9))
-        blf.size(0,13);blf.color(0,1,1,1,1);blf.position(0,x+10,y+h-19,0)
+        editor._draw_rect(x+1,y+h-34,w-2,33,(.085,.085,.085,.86))
+        blf.size(0,13);blf.color(0,1,1,1,1);blf.position(0,x+10,y+h-23,0)
         blf.draw(0,'C : SCENE' if scene_view else 'C : SECTION')
         for key,label,(bx,by,bw,bh) in self.buttons(editor):
             active=(scene_view and key=='scene') or (not scene_view and key=='section')
@@ -227,7 +222,7 @@ class ThirdPanel:
         gpu.state.scissor_test_set(False)
         with self.offscreen.bind():
             framebuffer=gpu.state.active_framebuffer_get()
-            framebuffer.clear(color=(.025,.025,.025,1),depth=1)
+            framebuffer.clear(color=(0,0,0,0),depth=1)
             with gpu.matrix.push_pop(), gpu.matrix.push_pop_projection():
                 gpu.matrix.load_matrix(view)
                 gpu.matrix.load_projection_matrix(projection)

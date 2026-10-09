@@ -2,7 +2,7 @@
 bl_info = {
     "name": "HP Section Mini Editor",
     "author": "OpenAI + yashi",
-    "version": (0, 27, 6),
+    "version": (0, 27, 7),
     "blender": (4, 3, 0),
     "location": "3D View > Sidebar > HP Tools",
     "description": "Two fully interactive section views with translucent world-plane editing.",
@@ -7671,6 +7671,8 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
             blf.disable(0, blf.CLIPPING)
 
     def _draw_rect(self, x, y, w, h, color):
+        # Reassert after text / brush HUD drawing so A matches B's alpha.
+        gpu.state.blend_set('ALPHA')
         shader = gpu.shader.from_builtin('UNIFORM_COLOR')
 
         batch = batch_for_shader(

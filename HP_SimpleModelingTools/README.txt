@@ -1,4 +1,12 @@
-HP Simple Modeling Tools / Path Pen v0.27.6
+HP Simple Modeling Tools / Path Pen v0.27.7
+
+SECTION WINDOW UPDATE v0.27.7
+- C Scene/Section buttons invoke the right-click window mode switch: C Scene
+  means section-only background; C Section means full-scene background.
+- Same window, selection, settings, undo and independent C camera are preserved.
+- A/B/C use B's background alpha and header colors; no custom C grid.
+- Scene buffer clears transparent, so C's object preview preserves panel alpha.
+- Rectangle drawing reasserts alpha blending after text/HUD drawing.
 
 SECTION WINDOW UPDATE v0.27.6
 - Detached C has top-left Scene / Section buttons matching A's button height.

@@ -294,35 +294,30 @@ class EditorTests(unittest.TestCase):
         bpy.data.objects.remove(reference,do_unlink=True)
         bpy.data.objects.remove(unrelated,do_unlink=True)
 
-    def test_third_panel_buttons_switch_only_c_without_edits(self):
-        editor=self.open_inline()
-        third=editor._third_panel
-        editor._selected={0,2}
-        history=len(editor._history)
-        before=[v.co.copy() for v in editor._bm.verts]
-        original=self.area.spaces.active.region_3d.view_rotation.copy()
-        self.assertEqual([key for key,_,_ in third.buttons(editor)],['full'])
-        def click(key):
-            _,_,(x,y,w,h)=next(button for button in third.buttons(editor) if button[0]==key)
-            self.assertEqual(third.event(editor,bpy.context,event('LEFTMOUSE',x=x+w/2,y=y+h/2)),{'RUNNING_MODAL'})
-            self.assertEqual(third.event(editor,bpy.context,event('LEFTMOUSE','RELEASE',x=x+w/2,y=y+h/2)),{'RUNNING_MODAL'})
-            self.assertIsNone(editor._preview_state)
-        editor.detached=True
-        editor.preview_only=True
-        self.assertEqual([key for key,_,_ in third.buttons(editor)],['scene','section'])
-        self.assertTrue(third.scene_view(editor))
-        click('section')
-        self.assertFalse(third.scene_view(editor))
-        click('scene')
-        self.assertTrue(third.scene_view(editor))
-        editor.preview_only=False
-        self.assertTrue(third.scene_view(editor))
-        editor.detached=False
-        self.assertFalse(third.scene_view(editor))
-        self.assertEqual(editor._selected,{0,2})
-        self.assertEqual(len(editor._history),history)
-        self.assertEqual([v.co.copy() for v in editor._bm.verts],before)
-        self.assertLess(original.rotation_difference(self.area.spaces.active.region_3d.view_rotation).angle,1e-5)
+    def test_third_buttons_swap_background_and_c_in_the_same_window(self):
+        self.assertEqual(bpy.ops.hp.section_window(),{'FINISHED'})
+        initial=section._ACTIVE_SECTION_EDITOR
+        initial._selected={0,2}
+        initial._push_history()
+        third=initial._third_panel
+        target=section._view_context(initial._owner_window_ptr,initial._owner_area_ptr)
+        count=len(bpy.context.window_manager.windows)
+        with bpy.context.temp_override(window=target[0],area=target[1],region=target[2]):
+            for key,preview in [('section',False),('scene',True),('scene',True)]:
+                editor=section._ACTIVE_SECTION_EDITOR
+                _,_,(x,y,w,h)=next(button for button in third.buttons(editor) if button[0]==key)
+                result=third.event(editor,bpy.context,event('LEFTMOUSE',x=x+w/2,y=y+h/2))
+                self.assertIn(result,({'FINISHED'},{'RUNNING_MODAL'}))
+                current=section._ACTIVE_SECTION_EDITOR
+                self.assertEqual(current.preview_only,preview)
+                self.assertEqual(third.scene_view(current),preview)
+                self.assertIs(current._third_panel,third)
+                self.assertEqual(current._owner_window_ptr,initial._owner_window_ptr)
+                self.assertEqual(current._selected,{0,2})
+                self.assertEqual(len(current._history),1)
+                self.assertEqual(len(bpy.context.window_manager.windows),count)
+            current._finish(bpy.context,release_workspace=True)
+            bpy.ops.wm.window_close()
 
     def test_third_full_button_opens_the_detached_section_editor(self):
         editor=self.open_inline()
