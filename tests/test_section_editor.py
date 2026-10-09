@@ -3,9 +3,12 @@ For real window/renderer tests, run without --background under a display (or Xvf
 """
 import sys
 import math
+import ctypes
+import os
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch, Mock
 import bpy
 import bmesh
 from mathutils import Vector
@@ -14,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import HP_SimpleModelingTools as addon
 from HP_SimpleModelingTools import HP_Section_MiniEditor as section
 from HP_SimpleModelingTools import HP_Curve_MiniEditor as curve
+from HP_SimpleModelingTools import HP_Window_Placement as placement
 addon.register()
 
 
@@ -78,6 +82,57 @@ class BrushTests(unittest.TestCase):
         result = section._stabilize_2d(raw, level=4, closed=False)
         self.assertEqual(result[0], raw[0])
         self.assertEqual(result[-1], raw[-1])
+
+
+class MonitorPlacementTests(unittest.TestCase):
+    def test_other_monitor_when_main_window_is_on_either_display(self):
+        monitors=[(0,0,1920,1040),(1920,0,3840,1040)]
+        self.assertEqual(placement.choose_other_monitor(monitors,(100,100,1500,900)),monitors[1])
+        self.assertEqual(placement.choose_other_monitor(monitors,(2000,100,3500,900)),monitors[0])
+
+    def test_negative_monitor_coordinates_and_window_size_are_preserved(self):
+        target=(-2560,0,0,1400)
+        self.assertEqual(placement.choose_other_monitor([(0,0,1920,1040),target],(100,100,1500,900)),target)
+        x,y,width,height=placement.placement_in_work_area(target,(0,0,1322,876))
+        self.assertLess(x,0)
+        self.assertEqual((width,height),(1322,876))
+        self.assertGreaterEqual(y,0)
+
+    def test_single_monitor_is_left_unchanged(self):
+        self.assertIsNone(placement.choose_other_monitor([(0,0,1920,1040)],(100,100,1500,900)))
+
+    def test_smaller_display_clamps_window_to_work_area(self):
+        x,y,w,h=placement.placement_in_work_area((1920,-200,3200,800),(0,0,2000,1400))
+        self.assertGreaterEqual(x,1920)
+        self.assertGreaterEqual(y,-200)
+        self.assertLessEqual(x+w,3200)
+        self.assertLessEqual(y+h,800)
+
+    def test_native_move_targets_only_the_new_owned_window(self):
+        from ctypes import wintypes
+        class Info(ctypes.Structure):
+            _fields_=[('cbSize',wintypes.DWORD),('rcWork',wintypes.RECT)]
+        work=[(0,0,1920,1040),(-1920,0,0,1040)]
+        def monitors(_hdc,_rect,callback,_data):
+            for i in range(len(work)):callback(i,None,None,0)
+        def monitor_info(i,info):
+            info._obj.rcWork=wintypes.RECT(*work[i])
+            return True
+        native=SimpleNamespace(
+            GetWindowThreadProcessId=lambda hwnd,pid:setattr(pid._obj,'value',os.getpid()),
+            EnumDisplayMonitors=monitors,GetMonitorInfoW=monitor_info,SetWindowPos=Mock(return_value=True))
+        before=dict(handles={1:(100,100,1500,900)},source=(100,100,1500,900))
+        after=dict(handles={1:(100,100,1500,900),2:(100,100,1500,900)},source=(100,100,1500,900))
+        with patch.object(placement,'snapshot_windows',return_value=after), patch.object(placement,'_windows_api',return_value=(native,None,lambda cb:cb,Info)):
+            self.assertEqual(placement.move_new_window(before),'moved')
+        native.SetWindowPos.assert_called_once_with(2,None,-1888,32,1400,800,0x14)
+
+    def test_ambiguous_native_window_identity_never_moves_a_window(self):
+        before=dict(handles={1:(0,0,100,100)},source=(0,0,100,100))
+        after=dict(handles={1:(0,0,100,100),2:(0,0,100,100),3:(0,0,100,100)},source=(0,0,100,100))
+        with patch.object(placement,'snapshot_windows',return_value=after), patch.object(placement,'_windows_api') as native:
+            self.assertEqual(placement.move_new_window(before),'pending')
+            native.assert_not_called()
 
 
 @unittest.skipIf(bpy.app.background, 'Modal editing requires a window manager; run the GUI command')
@@ -316,6 +371,85 @@ class EditorTests(unittest.TestCase):
         editor._preview_event(bpy.context,event('Z',ctrl=True),False)
         for i,co in enumerate(before):self.assertLess((editor._bm.verts[i].co-co).length,1e-6)
 
+    def test_right_click_in_panel_reaches_context_menu_with_selected_points(self):
+        editor = self.open_inline()
+        editor._selected={0,1}
+        point=editor._panel_points[0]
+        self.assertEqual(editor._modal_impl(bpy.context,event('RIGHTMOUSE',x=point.x,y=point.y)),{'PASS_THROUGH'})
+        self.assertFalse(editor._finished)
+        self.assertEqual(editor._selected,{0,1})
+
+    def test_sidebar_is_hidden_by_default(self):
+        self.assertFalse(section.HP_PT_section_tools.poll(bpy.context))
+
+    def test_inline_to_detached_and_back_preserves_selection_settings_and_undo(self):
+        old=self.open_inline()
+        old._selected={0,2}
+        old._hp_settings['follow_strength_a']=.5
+        old._push_history()
+        windows_before={w.as_pointer() for w in bpy.context.window_manager.windows}
+        self.assertEqual(bpy.ops.hp.section_window(),{'FINISHED'})
+        detached=section._ACTIVE_SECTION_EDITOR
+        owner=detached._owner_window_ptr
+        self.assertTrue(old._finished)
+        self.assertTrue(detached.detached)
+        self.assertEqual(detached._selected,{0,2})
+        self.assertEqual(detached._hp_settings['follow_strength_a'],.5)
+        self.assertEqual(len(detached._history),1)
+        self.assertEqual(bpy.ops.hp.section_window(),{'FINISHED'})
+        self.assertEqual(section._ACTIVE_SECTION_EDITOR._owner_window_ptr,owner)
+        self.assertEqual(len(bpy.context.window_manager.windows),len(windows_before)+1)
+        window,area,region=section._view_context(owner,detached._owner_area_ptr)
+        with bpy.context.temp_override(window=window,area=area,region=region):
+            self.assertEqual(bpy.ops.hp.section_inline(),{'FINISHED'})
+        inline=section._ACTIVE_SECTION_EDITOR
+        self.assertFalse(inline.detached)
+        self.assertEqual(inline._owner_window_ptr,self.window.as_pointer())
+        self.assertEqual(inline._selected,{0,2})
+        self.assertEqual(len(inline._history),1)
+        # Deferred native close runs in the real event loop; finish this test's
+        # duplicate explicitly to avoid retaining a window across other tests.
+        with bpy.context.temp_override(window=window):
+            bpy.ops.wm.window_close()
+
+    def test_close_detached_schedules_its_owned_window_for_closing(self):
+        self.assertEqual(bpy.ops.hp.section_window(),{'FINISHED'})
+        editor=section._ACTIVE_SECTION_EDITOR
+        editor._selected={0,2}
+        window,area,region=section._view_context(editor._owner_window_ptr,editor._owner_area_ptr)
+        with bpy.context.temp_override(window=window,area=area,region=region):
+            self.assertEqual(bpy.ops.hp.section_close(),{'FINISHED'})
+        self.assertTrue(editor._finished)
+        self.assertIsNone(section._ACTIVE_SECTION_EDITOR)
+        # The final event-loop check below confirms that this native window
+        # actually disappears, rather than merely losing its overlay.
+
+    def test_settings_survive_switch_while_idle_without_mesh_selection(self):
+        editor=self.open_inline()
+        editor._smooth_brush_strength=.8
+        bpy.ops.object.mode_set(mode='OBJECT')
+        editor._modal_impl(bpy.context,event('TIMER'))
+        self.assertTrue(editor._idle)
+        self.assertEqual(bpy.ops.hp.section_window(),{'FINISHED'})
+        detached=section._ACTIVE_SECTION_EDITOR
+        self.assertTrue(detached._idle)
+        self.assertAlmostEqual(detached._smooth_brush_strength,.8)
+        owner=detached._owner_window_ptr
+        window,area,region=section._view_context(owner,detached._owner_area_ptr)
+        with bpy.context.temp_override(window=window,area=area,region=region):
+            self.assertEqual(bpy.ops.hp.section_inline(),{'FINISHED'})
+        self.assertFalse(section._ACTIVE_SECTION_EDITOR.detached)
+        self.assertAlmostEqual(section._ACTIVE_SECTION_EDITOR._smooth_brush_strength,.8)
+        with bpy.context.temp_override(window=window):
+            bpy.ops.wm.window_close()
+
+    def test_close_command_does_not_require_deselecting(self):
+        editor=self.open_inline()
+        editor._selected={0,2}
+        self.assertEqual(bpy.ops.hp.section_close(),{'FINISHED'})
+        self.assertTrue(editor._finished)
+        self.assertIsNone(section._ACTIVE_SECTION_EDITOR)
+
     @unittest.skipIf(bpy.app.background, 'Requires an actual window manager')
     def test_detached_window_and_visibility_restoration(self):
         previous = {w.as_pointer() for w in bpy.context.window_manager.windows}
@@ -349,9 +483,12 @@ def run():
     else:
         sys.stdout.flush()
         if not result.wasSuccessful():
-            import os
             os._exit(1)
         def finish():
+            if len(bpy.context.window_manager.windows) != 1:
+                print('FAIL: deferred section-window closure left extra windows',flush=True)
+                os._exit(1)
+            print('PASS: deferred section-window closure',flush=True)
             with bpy.context.temp_override(window=bpy.context.window_manager.windows[0]):
                 addon.unregister()
                 bpy.ops.wm.quit_blender()

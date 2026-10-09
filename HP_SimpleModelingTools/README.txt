@@ -1,4 +1,14 @@
-HP Simple Modeling Tools / Path Pen v0.27.1
+HP Simple Modeling Tools / Path Pen v0.27.2
+
+SECTION WINDOW UPDATE v0.27.2
+- Right-click > HP 断面エディター: switch inline / detached or close directly.
+- No deselection or separate close step is required. Point selection, settings,
+  and undo history survive a mode switch. Repeated detached requests reuse it.
+- Closing the editor also closes its detached window. N-panel controls are
+  hidden by default; an add-on preference can show them again.
+- Windows: newly created detached windows automatically move to a different
+  monitor from the source Blender window. Single-monitor setups stay in place.
+  Placement can be disabled in preferences. Windows hardware is unverified.
 
 SECTION WINDOW UPDATE v0.27.1
 - Section panels now start at the medium 480x360 size, fitted to the viewport.

@@ -2,7 +2,7 @@
 bl_info = {
     "name": "HP Section Mini Editor",
     "author": "OpenAI + yashi",
-    "version": (0, 27, 1),
+    "version": (0, 27, 2),
     "blender": (4, 3, 0),
     "location": "3D View > Sidebar > HP Tools",
     "description": "Two fully interactive section views with translucent world-plane editing.",
@@ -13,6 +13,8 @@ import bpy
 from .HP_Section_Preview import SectionPreviewMixin
 import time
 import traceback
+import copy
+from . import HP_Window_Placement
 from bpy.props import EnumProperty, BoolProperty
 import bmesh
 import blf
@@ -6363,6 +6365,10 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
                           or self._transform_mode or self._secondary_transform_mode
                           or self._viewport_navigation_active or self._f_hold_active or getattr(self, '_hp_confirm_hold', None)
                           or self._hp_menu is not None)
+        if (event.type == 'RIGHTMOUSE' and event.value == 'PRESS'
+                and not active_gesture and self._preview_state is None
+                and not self._pen_mode and not self._secondary_pen_mode):
+            return {'PASS_THROUGH'}
         in_panels = (self._inside_panel(mx, my) or self._inside_secondary(mx, my)
                      or self._inside_primary_header(mx, my)
                      or self._inside_secondary_header(mx, my))
@@ -8720,22 +8726,128 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
         self._finish(context, release_workspace=True)
 
 
-class HP_OT_section_window(bpy.types.Operator):
-    bl_idname = "hp.section_window"
-    bl_label = "HP Section: 別ウィンドウを開く"
-    bl_description = "断面ビュー2つと頂点列の3Dプレビューを別ウィンドウで開きます"
+def _view_context(window_ptr, area_ptr):
+    for window in bpy.context.window_manager.windows:
+        if window.as_pointer() != window_ptr:
+            continue
+        area = next((a for a in window.screen.areas
+                     if a.as_pointer() == area_ptr and a.type == 'VIEW_3D'), None)
+        if area is not None:
+            region = next((r for r in area.regions if r.type == 'WINDOW'), None)
+            if region is not None:
+                return window, area, region
+    return None
+
+
+def _section_preferences(context):
+    addon = context.preferences.addons.get(__package__)
+    return addon.preferences if addon is not None else None
+
+
+def _session_after_finish(editor, context):
+    editor._finish(context, release_workspace=True)
+    fields = ('_selected', '_hp_settings', '_history', '_topology_undo_steps',
+              '_topology_selection_history', '_primary_view', '_secondary_view',
+              '_view_zoom', '_secondary_zoom', '_panel_stage', '_xray',
+              '_view_a_collapsed', '_view_b_collapsed', '_lock_x', '_lock_y', '_lock_z',
+              '_prop_enabled', '_prop_radius_px', '_pen_anchor_mode',
+              '_pen_stabilizer', '_secondary_pen_stabilizer',
+              '_smooth_brush_radius', '_smooth_brush_strength', '_flip_x', '_flip_y',
+              '_secondary_flip_y', '_secondary_plane')
+    return dict(obj=editor._obj, signature=editor._signature,
+                values={key:copy.copy(getattr(editor,key)) for key in fields})
+
+
+def _restore_session(editor, session, context):
+    if session is None or editor is None:
+        return
+    same_target = editor._obj == session['obj'] and editor._signature == session['signature']
+    target_fields = {'_selected','_history','_topology_undo_steps','_topology_selection_history'}
+    for key,value in session['values'].items():
+        if same_target or key not in target_fields:
+            setattr(editor,key,value)
+    editor._layout_panels(context)
+    editor._rebuild(context)
+    if editor.detached:
+        editor._frame_preview(context)
+
+
+def _close_owned_window_later(window_ptr):
+    owned = next((w for w in bpy.context.window_manager.windows if w.as_pointer() == window_ptr),None)
+    def close():
+        try:
+            if owned is None or owned.as_pointer() != window_ptr or owned not in bpy.context.window_manager.windows[:]:
+                return None
+        except ReferenceError:
+            return None
+        if _ACTIVE_SECTION_EDITOR is not None and _ACTIVE_SECTION_EDITOR._owner_window_ptr == window_ptr:
+            return None
+        window = next((w for w in bpy.context.window_manager.windows if w.as_pointer() == window_ptr),None)
+        if window is not None and len(bpy.context.window_manager.windows)>1:
+            with bpy.context.temp_override(window=window):
+                bpy.ops.wm.window_close()
+        return None
+    bpy.app.timers.register(close, first_interval=0.1)
+
+
+class HP_OT_section_inline(bpy.types.Operator):
+    bl_idname = "hp.section_inline"
+    bl_label = "HP Section: ビュー内に切り替え"
+    bl_description = "断面エディターを閉じる操作なしで元の3Dビューに切り替えます"
 
     @classmethod
     def poll(cls, context):
         return context.area is not None and context.area.type == 'VIEW_3D'
 
     def execute(self, context):
-        if _ACTIVE_SECTION_EDITOR is not None:
-            self.report({'INFO'}, "断面エディターは既に開いています。閉じてから切り替えてください")
-            return {'CANCELLED'}
+        editor = _ACTIVE_SECTION_EDITOR
+        if editor is not None and not editor.detached and editor._owner_context_active(context):
+            return {'FINISHED'}
+        home = None
+        old_window = None
+        session = None
+        if editor is not None:
+            if editor.detached:
+                home = _view_context(getattr(editor,'_home_window_ptr',0),getattr(editor,'_home_area_ptr',0))
+                old_window = editor._owner_window_ptr
+            session = _session_after_finish(editor,context)
+        home = home or (context.window,context.area,next(r for r in context.area.regions if r.type == 'WINDOW'))
+        with context.temp_override(window=home[0],area=home[1],region=home[2]):
+            result = bpy.ops.hp.section_mini_editor('INVOKE_DEFAULT',detached=False)
+            if result == {'RUNNING_MODAL'}:
+                _restore_session(_ACTIVE_SECTION_EDITOR,session,bpy.context)
+        if old_window is not None and result == {'RUNNING_MODAL'} and old_window != home[0].as_pointer():
+            _close_owned_window_later(old_window)
+        return {'FINISHED'} if result == {'RUNNING_MODAL'} else {'CANCELLED'}
+
+
+class HP_OT_section_window(bpy.types.Operator):
+    bl_idname = "hp.section_window"
+    bl_label = "HP Section: 別ウィンドウに切り替え"
+    bl_description = "断面エディターを別ウィンドウに切り替え、Windowsでは別モニターに配置します"
+
+    @classmethod
+    def poll(cls, context):
+        return context.area is not None and context.area.type == 'VIEW_3D'
+
+    def execute(self, context):
+        editor = _ACTIVE_SECTION_EDITOR
+        if editor is not None and editor.detached:
+            if _view_context(editor._owner_window_ptr,editor._owner_area_ptr) is not None:
+                return {'FINISHED'}
+            editor._finish(context,release_workspace=True)
+            editor = None
+        session = _session_after_finish(editor,context) if editor is not None else None
+        home = (context.window.as_pointer(),context.area.as_pointer())
+        preferences = _section_preferences(context)
+        auto_move = preferences is None or preferences.move_to_other_monitor
+        native = HP_Window_Placement.snapshot_windows() if auto_move else None
         previous = {w.as_pointer() for w in context.window_manager.windows}
         result = bpy.ops.screen.area_dupli('INVOKE_DEFAULT')
         if result != {'FINISHED'}:
+            # Recover the original mode if native window creation failed.
+            bpy.ops.hp.section_mini_editor('INVOKE_DEFAULT',detached=False)
+            _restore_session(_ACTIVE_SECTION_EDITOR,session,context)
             return {'CANCELLED'}
         window = next((w for w in context.window_manager.windows
                        if w.as_pointer() not in previous), None)
@@ -8746,7 +8858,37 @@ class HP_OT_section_window(bpy.types.Operator):
         region = next(r for r in area.regions if r.type == 'WINDOW')
         with context.temp_override(window=window, area=area, region=region):
             result = bpy.ops.hp.section_mini_editor('INVOKE_DEFAULT', detached=True)
+            if result == {'RUNNING_MODAL'}:
+                new = _ACTIVE_SECTION_EDITOR
+                new._home_window_ptr, new._home_area_ptr = home
+                _restore_session(new,session,bpy.context)
+        if result == {'RUNNING_MODAL'} and auto_move and native is not None:
+            owner = window.as_pointer()
+            HP_Window_Placement.schedule_other_monitor(native,
+                lambda: _ACTIVE_SECTION_EDITOR is not None and _ACTIVE_SECTION_EDITOR.detached
+                and _ACTIVE_SECTION_EDITOR._owner_window_ptr == owner)
         return {'FINISHED'} if result == {'RUNNING_MODAL'} else {'CANCELLED'}
+
+
+class HP_MT_section_display(bpy.types.Menu):
+    bl_label = "HP 断面エディター"
+    bl_idname = "HP_MT_section_display"
+
+    def draw(self, context):
+        self.layout.operator('hp.section_inline',text="ビュー内に切り替え",icon='VIEW3D')
+        self.layout.operator('hp.section_window',text="別ウィンドウに切り替え",icon='WINDOW')
+        self.layout.separator()
+        row=self.layout.row()
+        row.enabled=_ACTIVE_SECTION_EDITOR is not None
+        row.operator('hp.section_close',text="断面エディターを閉じる",icon='X')
+
+
+def _draw_section_context(self, context):
+    self.layout.menu('HP_MT_section_display',icon='WINDOW')
+    self.layout.separator()
+
+
+_CONTEXT_MENUS = ('VIEW3D_MT_edit_mesh_context_menu','VIEW3D_MT_object_context_menu')
 
 
 class HP_OT_section_close(bpy.types.Operator):
@@ -8754,8 +8896,12 @@ class HP_OT_section_close(bpy.types.Operator):
     bl_label = "断面エディターを閉じる"
 
     def execute(self, context):
-        if _ACTIVE_SECTION_EDITOR is not None:
-            _ACTIVE_SECTION_EDITOR._finish(context, release_workspace=True)
+        editor = _ACTIVE_SECTION_EDITOR
+        if editor is not None:
+            owner = editor._owner_window_ptr if editor.detached else None
+            editor._finish(context, release_workspace=True)
+            if owner is not None:
+                _close_owned_window_later(owner)
         return {'FINISHED'}
 
 
@@ -8765,10 +8911,15 @@ class HP_PT_section_tools(bpy.types.Panel):
     bl_region_type = 'UI'
     bl_category = 'HP Tools'
 
+    @classmethod
+    def poll(cls, context):
+        preferences = _section_preferences(context)
+        return preferences is not None and preferences.show_section_sidebar
+
     def draw(self, context):
         layout = self.layout
         layout.operator('hp.section_window', icon='WINDOW')
-        layout.operator('hp.section_mini_editor', text="このビュー内で開く").detached = False
+        layout.operator('hp.section_inline', text="ビュー内に切り替え")
         layout.operator('hp.section_close', icon='X')
         if context.edit_object is not None and context.edit_object.type == 'CURVE':
             layout.operator('hp.curve_mini_editor', text="カーブエディターを開く")
@@ -8799,6 +8950,8 @@ classes = (
     HP_MT_section_pen_anchor_pie,
     HP_OT_section_mini_editor,
     HP_OT_section_window,
+    HP_OT_section_inline,
+    HP_MT_section_display,
     HP_OT_section_close,
     HP_PT_section_tools,
 )
@@ -8807,6 +8960,9 @@ classes = (
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
+
+    for name in _CONTEXT_MENUS:
+        getattr(bpy.types,name).prepend(_draw_section_context)
 
     if not bpy.app.timers.is_registered(_watch_editor_window):
         bpy.app.timers.register(
@@ -8818,6 +8974,9 @@ def register():
 
 def unregister():
     global _RUNNING, _ACTIVE_SECTION_EDITOR, _PINNED_WORKSPACE_PTR
+
+    for name in _CONTEXT_MENUS:
+        getattr(bpy.types,name).remove(_draw_section_context)
 
     if bpy.app.timers.is_registered(_watch_editor_window):
         bpy.app.timers.unregister(_watch_editor_window)
