@@ -443,6 +443,50 @@ class EditorTests(unittest.TestCase):
         with bpy.context.temp_override(window=window):
             bpy.ops.wm.window_close()
 
+    def test_full_scene_mode_keeps_geometry_camera_and_native_navigation(self):
+        view=self.area.spaces.active.region_3d
+        old_perspective=view.view_perspective
+        view.view_perspective='ORTHO'
+        rotation=view.view_rotation.copy()
+        location=view.view_location.copy()
+        distance=view.view_distance
+        before=len(bpy.context.window_manager.windows)
+        self.assertEqual(bpy.ops.hp.section_window(full_scene=True),{'FINISHED'})
+        full=section._ACTIVE_SECTION_EDITOR
+        owner=full._owner_window_ptr
+        window,area,region=section._view_context(owner,full._owner_area_ptr)
+        with bpy.context.temp_override(window=window,area=area,region=region):
+            self.assertFalse(full.preview_only)
+            self.assertEqual(area.spaces.active.region_3d.view_perspective,'ORTHO')
+            self.assertTrue(area.spaces.active.show_object_viewport_mesh)
+            self.assertTrue(area.spaces.active.overlay.show_overlays)
+            rv3d=area.spaces.active.region_3d
+            self.assertLess(rotation.rotation_difference(rv3d.view_rotation).angle,1e-5)
+            self.assertLess((location-rv3d.view_location).length,1e-5)
+            self.assertAlmostEqual(distance,rv3d.view_distance,places=5)
+            for kind in ('NUMPAD_1','NUMPAD_3','NUMPAD_7','MIDDLEMOUSE','WHEELUPMOUSE','G'):
+                self.assertEqual(full._modal_impl(bpy.context,event(kind)),{'PASS_THROUGH'})
+            self.assertIsNone(full._preview_state)
+            full._selected={0,2}
+            self.assertEqual(bpy.ops.hp.section_window(full_scene=False),{'FINISHED'})
+            limited=section._ACTIVE_SECTION_EDITOR
+            self.assertTrue(limited.preview_only)
+            self.assertEqual(rv3d.view_perspective,'PERSP')
+            self.assertEqual(limited._owner_window_ptr,owner)
+            self.assertFalse(area.spaces.active.show_object_viewport_mesh)
+            self.assertEqual(bpy.ops.hp.section_window(full_scene=True),{'FINISHED'})
+            restored=section._ACTIVE_SECTION_EDITOR
+            self.assertFalse(restored.preview_only)
+            self.assertEqual(rv3d.view_perspective,'ORTHO')
+            self.assertEqual(restored._selected,{0,2})
+            self.assertEqual(len(bpy.context.window_manager.windows),before+1)
+            self.assertTrue(area.spaces.active.show_object_viewport_mesh)
+            self.assertLess((rv3d.view_location-location).length,1e-5)
+            self.assertAlmostEqual(rv3d.view_distance,distance,places=5)
+            restored._finish(bpy.context,release_workspace=True)
+            bpy.ops.wm.window_close()
+        view.view_perspective=old_perspective
+
     def test_close_command_does_not_require_deselecting(self):
         editor=self.open_inline()
         editor._selected={0,2}

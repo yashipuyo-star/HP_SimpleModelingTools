@@ -1,4 +1,12 @@
-HP Simple Modeling Tools / Path Pen v0.27.2
+HP Simple Modeling Tools / Path Pen v0.27.3
+
+SECTION WINDOW UPDATE v0.27.3
+- Right-click > HP 断面エディター now offers detached "断面のみ" and "シーン全体".
+- Full-scene mode duplicates the source viewport's scene and view settings.
+  It supports native numpad view changes and free orbit/pan/zoom, plus native
+  selection/editing outside the A/B panels. Mesh data remains shared.
+- Switching limited/full scene reuses the same OS window and restores the
+  full-scene view position, projection, and visibility settings.
 
 SECTION WINDOW UPDATE v0.27.2
 - Right-click > HP 断面エディター: switch inline / detached or close directly.

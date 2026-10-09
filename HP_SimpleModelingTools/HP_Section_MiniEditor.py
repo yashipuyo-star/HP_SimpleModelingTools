@@ -2,7 +2,7 @@
 bl_info = {
     "name": "HP Section Mini Editor",
     "author": "OpenAI + yashi",
-    "version": (0, 27, 2),
+    "version": (0, 27, 3),
     "blender": (4, 3, 0),
     "location": "3D View > Sidebar > HP Tools",
     "description": "Two fully interactive section views with translucent world-plane editing.",
@@ -1849,6 +1849,7 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     detached: BoolProperty(default=False, options={'SKIP_SAVE'})
+    preview_only: BoolProperty(default=True, options={'SKIP_SAVE'})
 
     def _layout_panels(self, context):
         if self._preview_state or self._dragging or self._secondary_dragging or self._brush_mode or self._pen_drawing or self._secondary_pen_drawing or self._transform_mode or self._secondary_transform_mode:
@@ -1956,6 +1957,7 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
         self._idle = True
         self._preview_state = None
         self._hp_menu = None
+        self._preview_camera_backup = None
         self._preview_filter_backup = {}
         self._preview_overlay_backup = None
 
@@ -2154,8 +2156,11 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
             self._rebuild(context, chain)
             self._idle = False
         self._layout_panels(context)
-        if self.detached:
+        if self.detached and self.preview_only:
             space = context.space_data
+            rv3d = space.region_3d
+            self._preview_camera_backup = {key:copy.copy(getattr(rv3d,key)) for key in
+                ('view_location','view_rotation','view_distance','view_perspective')}
             for prop in space.bl_rna.properties:
                 if prop.identifier.startswith('show_object_viewport_'):
                     self._preview_filter_backup[prop.identifier] = getattr(space, prop.identifier)
@@ -7770,12 +7775,13 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
                     blf.draw(0, f"{'A' if side_index == 0 else 'B'}{depth} {weight * 100:.0f}%")
 
     def _frame_preview(self, context):
-        if not self._ordered:
+        if not self.detached or not self.preview_only or not self._ordered:
             return
         points = [self._obj.matrix_world @ self._bm.verts[vi].co for vi in self._ordered]
         center = sum(points, Vector()) / len(points)
         rv3d = context.space_data.region_3d
         rv3d.view_location = center
+        rv3d.view_perspective = 'PERSP'
         bottom = self._panel_y + self._panel_h + 24
         available = max(180, context.region.height - bottom - 40)
         rv3d.view_distance = max(0.1, max((p - center).length for p in points) * 2.2 * context.region.height / available)
@@ -7828,7 +7834,7 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
         try:
             gpu.state.depth_test_set('NONE')
             shader.bind()
-            if self.detached and owner:
+            if self.detached and self.preview_only and owner:
                 shader.uniform_float('color', (0.3, 0.7, 1.0, 1.0))
                 gpu.state.point_size_set(5.0)
                 batch_for_shader(shader, 'POINTS', {'pos': positions}).draw(shader)
@@ -8674,6 +8680,11 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
                 for key, value in self._preview_filter_backup.items():
                     setattr(space, key, value)
                 space.overlay.show_overlays = self._preview_overlay_backup
+                camera = getattr(self,'_preview_camera_backup',None)
+                if camera is not None:
+                    for key,value in camera.items():
+                        setattr(space.region_3d,key,value)
+                    space.region_3d.update()
         except (ReferenceError, RuntimeError):
             pass
 
@@ -8826,6 +8837,8 @@ class HP_OT_section_window(bpy.types.Operator):
     bl_label = "HP Section: 別ウィンドウに切り替え"
     bl_description = "断面エディターを別ウィンドウに切り替え、Windowsでは別モニターに配置します"
 
+    full_scene: BoolProperty(name="シーン全体を表示",default=False,options={'SKIP_SAVE'})
+
     @classmethod
     def poll(cls, context):
         return context.area is not None and context.area.type == 'VIEW_3D'
@@ -8833,8 +8846,19 @@ class HP_OT_section_window(bpy.types.Operator):
     def execute(self, context):
         editor = _ACTIVE_SECTION_EDITOR
         if editor is not None and editor.detached:
-            if _view_context(editor._owner_window_ptr,editor._owner_area_ptr) is not None:
-                return {'FINISHED'}
+            target = _view_context(editor._owner_window_ptr,editor._owner_area_ptr)
+            if target is not None:
+                if editor.preview_only == (not self.full_scene):
+                    return {'FINISHED'}
+                home = (getattr(editor,'_home_window_ptr',0),getattr(editor,'_home_area_ptr',0))
+                session = _session_after_finish(editor,context)
+                with context.temp_override(window=target[0],area=target[1],region=target[2]):
+                    result = bpy.ops.hp.section_mini_editor('INVOKE_DEFAULT',detached=True,preview_only=not self.full_scene)
+                    if result == {'RUNNING_MODAL'}:
+                        new = _ACTIVE_SECTION_EDITOR
+                        new._home_window_ptr,new._home_area_ptr = home
+                        _restore_session(new,session,bpy.context)
+                return {'FINISHED'} if result == {'RUNNING_MODAL'} else {'CANCELLED'}
             editor._finish(context,release_workspace=True)
             editor = None
         session = _session_after_finish(editor,context) if editor is not None else None
@@ -8857,7 +8881,7 @@ class HP_OT_section_window(bpy.types.Operator):
         area = next(a for a in window.screen.areas if a.type == 'VIEW_3D')
         region = next(r for r in area.regions if r.type == 'WINDOW')
         with context.temp_override(window=window, area=area, region=region):
-            result = bpy.ops.hp.section_mini_editor('INVOKE_DEFAULT', detached=True)
+            result = bpy.ops.hp.section_mini_editor('INVOKE_DEFAULT', detached=True,preview_only=not self.full_scene)
             if result == {'RUNNING_MODAL'}:
                 new = _ACTIVE_SECTION_EDITOR
                 new._home_window_ptr, new._home_area_ptr = home
@@ -8876,7 +8900,8 @@ class HP_MT_section_display(bpy.types.Menu):
 
     def draw(self, context):
         self.layout.operator('hp.section_inline',text="ビュー内に切り替え",icon='VIEW3D')
-        self.layout.operator('hp.section_window',text="別ウィンドウに切り替え",icon='WINDOW')
+        self.layout.operator('hp.section_window',text="別ウィンドウ：断面のみ",icon='WINDOW').full_scene = False
+        self.layout.operator('hp.section_window',text="別ウィンドウ：シーン全体",icon='VIEW3D').full_scene = True
         self.layout.separator()
         row=self.layout.row()
         row.enabled=_ACTIVE_SECTION_EDITOR is not None

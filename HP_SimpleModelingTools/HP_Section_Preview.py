@@ -153,7 +153,7 @@ class SectionPreviewMixin:
             self._smooth_brush_radius = max(20,min(240,self._smooth_brush_radius + sign*10))
 
     def _preview_event(self, context, event, in_panels):
-        if not self.detached:
+        if not self.detached or not self.preview_only:
             return None
         state = self._preview_state
         if in_panels and state is None:
@@ -270,7 +270,7 @@ class SectionPreviewMixin:
         return {'RUNNING_MODAL'}
 
     def _draw_preview_hud(self):
-        if not self.detached:
+        if not self.detached or not self.preview_only:
             return
         blf.size(0,13)
         blf.color(0,.85,.9,1,1)
