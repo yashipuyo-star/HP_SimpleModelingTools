@@ -18,6 +18,8 @@ class ThirdPanel:
         self.signature=None
         self.offscreen=None
         self.scene_rendered=False
+        self.detached_scene=None
+        self.button_pressed=False
         self.rect=(0,0,1,1)
 
     def close(self):
@@ -25,14 +27,37 @@ class ThirdPanel:
             self.offscreen.free()
             self.offscreen=None
 
-    def fit(self, editor):
+    def fit(self, editor, whole_object=None, reset_rotation=True):
         if editor._idle or not editor._target_available(bpy.context):
             return
-        points=[editor._obj.matrix_world @ editor._bm.verts[i].co for i in editor._ordered]
+        if whole_object is None:
+            whole_object=self.scene_view(editor)
+        indices=range(len(editor._bm.verts)) if whole_object else editor._ordered
+        points=[editor._obj.matrix_world @ editor._bm.verts[i].co for i in indices]
         self.center=sum(points,Vector())/len(points)
-        self.distance=max(.1,max((p-self.center).length for p in points)*3)
-        self.rotation=bpy.context.space_data.region_3d.view_rotation.copy()
+        aspect=self.rect[2]/max(1,self.rect[3])
+        self.distance=max(.1,max((p-self.center).length for p in points)*3/max(.1,min(1,aspect)))
+        if reset_rotation:
+            self.rotation=bpy.context.space_data.region_3d.view_rotation.copy()
         self.signature=(editor._obj,editor._signature)
+
+    def scene_view(self, editor):
+        if editor.detached:
+            return editor.preview_only if self.detached_scene is None else self.detached_scene
+        return False
+
+    def buttons(self, editor):
+        x,y,w,h=self.rect
+        cell=(w-16)/4
+        top=y+h-39
+        labels=(('scene','シーン'),('section','断面')) if editor.detached else (('full','全体'),)
+        return [(key,label,(x+8+i*cell,top-28,cell-2,28)) for i,(key,label) in enumerate(labels)]
+
+    def button_at(self, editor, mouse):
+        for key,_,(x,y,w,h) in self.buttons(editor):
+            if x<=mouse.x<=x+w and y<=mouse.y<=y+h:
+                return key
+        return None
 
     def matrices(self):
         _,_,w,h=self.rect
@@ -72,6 +97,9 @@ class ThirdPanel:
 
     def event(self,editor,context,event):
         mouse=Vector((event.mouse_region_x,event.mouse_region_y))
+        if self.button_pressed and event.type=='LEFTMOUSE' and event.value=='RELEASE':
+            self.button_pressed=False
+            return {'RUNNING_MODAL'}
         if self.navigation is not None:
             if event.type=='MIDDLEMOUSE' and event.value=='RELEASE':
                 self.navigation=None
@@ -90,6 +118,18 @@ class ThirdPanel:
         active=editor._third_editing and editor._preview_state is not None
         if not active and not self.inside(*mouse):
             return None
+        if not active and event.type=='LEFTMOUSE' and event.value=='PRESS':
+            button=self.button_at(editor,mouse)
+            if button is not None:
+                self.button_pressed=True
+                if button=='full':
+                    self.button_pressed=False
+                    bpy.ops.hp.section_window(full_scene=False)
+                    return {'FINISHED'} if editor._finished else {'RUNNING_MODAL'}
+                elif button in {'scene','section'}:
+                    self.detached_scene=button=='scene'
+                    self.fit(editor,whole_object=self.detached_scene,reset_rotation=False)
+                return {'RUNNING_MODAL'}
         if not active and event.type=='MIDDLEMOUSE' and event.value=='PRESS':
             self.navigation=mouse
             return {'RUNNING_MODAL'}
@@ -107,7 +147,7 @@ class ThirdPanel:
                 self.perspective=not self.perspective
                 return {'RUNNING_MODAL'}
             if event.type in {'HOME','NUMPAD_PERIOD'}:
-                self.fit(editor)
+                self.fit(editor,whole_object=self.scene_view(editor),reset_rotation=False)
                 return {'RUNNING_MODAL'}
         if editor._idle or not editor._target_available(context):
             return {'RUNNING_MODAL'} if event.type=='LEFTMOUSE' else None
@@ -129,7 +169,7 @@ class ThirdPanel:
 
     def _draw_contents(self,editor,context):
         x,y,w,h=self.rect
-        scene_view=editor.detached and editor.preview_only
+        scene_view=self.scene_view(editor)
         gpu.state.blend_set('ALPHA')
         editor._draw_rect(x,y,w,h,(.025,.025,.025,.82))
         if scene_view:
@@ -156,8 +196,24 @@ class ThirdPanel:
         editor._draw_rect(x,y+h-28,w,28,(.085,.085,.085,.9))
         blf.size(0,13);blf.color(0,1,1,1,1);blf.position(0,x+10,y+h-19,0)
         blf.draw(0,'C : SCENE' if scene_view else 'C : SECTION')
+        for key,label,(bx,by,bw,bh) in self.buttons(editor):
+            active=(scene_view and key=='scene') or (not scene_view and key=='section')
+            color=(.12,.40,.32,.96) if active else (.14,.16,.19,.96)
+            editor._draw_rect(bx,by,bw,bh,color)
+            blf.size(0,12)
+            blf.color(0,1,1,1,1)
+            blf.position(0,bx+7,by+9,0)
+            editor._draw_panel_text(label,bx+7,width=bw-12)
         if editor._third_editing:
             editor._draw_preview_hud()
+
+    def scene_objects(self, editor, context):
+        if editor._idle or not editor._target_available(context):
+            return ()
+        obj=editor._obj
+        if obj.hide_viewport or obj.hide_get(view_layer=context.view_layer):
+            return ()
+        return (obj,)
 
     def draw_scene(self,editor,context):
         x,y,w,h=self.rect
@@ -179,21 +235,8 @@ class ThirdPanel:
                 gpu.state.blend_set('ALPHA')
                 shader=gpu.shader.from_builtin('UNIFORM_COLOR')
                 depsgraph=context.evaluated_depsgraph_get()
-                for obj in context.scene.objects:
+                for obj in self.scene_objects(editor,context):
                     if obj.hide_viewport or obj.hide_get(view_layer=context.view_layer):
-                        continue
-                    if obj.type=='EMPTY' and obj.empty_display_type=='IMAGE' and obj.data is not None:
-                        image=obj.data
-                        if min(image.size)>0:
-                            scale=obj.empty_display_size/max(image.size)
-                            iw,ih=image.size[0]*scale,image.size[1]*scale
-                            ox,oy=obj.empty_image_offset
-                            positions=[obj.matrix_world @ Vector((u*iw,v*ih,0)) for u,v in
-                                       ((ox,oy),(ox+1,oy),(ox+1,oy+1),(ox,oy+1))]
-                            texture_shader=gpu.shader.from_builtin('IMAGE')
-                            texture_shader.bind()
-                            texture_shader.uniform_sampler('image',gpu.texture.from_image(image))
-                            batch_for_shader(texture_shader,'TRI_FAN',{'pos':positions,'texCoord':[(0,0),(1,0),(1,1),(0,1)]}).draw(texture_shader)
                         continue
                     if obj.type not in {'MESH','CURVE','SURFACE','FONT','META'}:
                         continue

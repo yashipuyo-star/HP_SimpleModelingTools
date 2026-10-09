@@ -1,4 +1,12 @@
-HP Simple Modeling Tools / Path Pen v0.27.5
+HP Simple Modeling Tools / Path Pen v0.27.6
+
+SECTION WINDOW UPDATE v0.27.6
+- Detached C has top-left Scene / Section buttons matching A's button height.
+- Scene shows only the active section's object; image references and other
+  objects are excluded, without changing native scene visibility.
+- Main inline C has a "全体" button performing the same action as right-click
+  "別ウィンドウ：断面のみ", preserving selection, settings, history and C camera.
+- C display buttons do not alter main view mode or shared section selection.
 
 SECTION WINDOW UPDATE v0.27.5
 - The extra companion OS window is replaced by embedded 3D panel C.
