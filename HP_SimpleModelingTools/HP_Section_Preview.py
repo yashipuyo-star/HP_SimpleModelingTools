@@ -8,15 +8,26 @@ from bpy_extras import view3d_utils
 
 
 class SectionPreviewMixin:
+    def _preview_view(self,context):
+        return self._third_panel.view() if self._third_editing else context.space_data.region_3d
+
+    def _preview_project(self,context,world):
+        if self._third_editing:
+            return self._third_panel.project(world)
+        return view3d_utils.location_3d_to_region_2d(context.region,context.space_data.region_3d,world)
+
+    def _preview_unproject(self,context,point,depth):
+        if self._third_editing:
+            return self._third_panel.unproject(point,depth)
+        return view3d_utils.region_2d_to_location_3d(context.region,context.space_data.region_3d,point,depth)
+
     def _preview_points(self, context):
         mw = self._obj.matrix_world
-        return [view3d_utils.location_3d_to_region_2d(
-            context.region, context.space_data.region_3d, mw @ self._bm.verts[vi].co
-        ) for vi in self._ordered]
+        return [self._preview_project(context,mw @ self._bm.verts[vi].co) for vi in self._ordered]
 
     def _preview_pick(self, context, mouse):
         candidates = []
-        rv3d = context.space_data.region_3d
+        rv3d = self._preview_view(context)
         for i, point in enumerate(self._preview_points(context)):
             if point is None or (point - mouse).length > 12:
                 continue
@@ -77,19 +88,19 @@ class SectionPreviewMixin:
 
     def _preview_transform(self, context, mouse):
         state = self._preview_state
-        rv3d = context.space_data.region_3d
+        rv3d = self._preview_view(context)
         pivot = state['pivot']
         start = state['start']
         axis_name = state['axis']
         axis = Vector((axis_name == 'X', axis_name == 'Y', axis_name == 'Z')) if axis_name else None
         if state['mode'] in {'DRAG', 'G'}:
-            begin = view3d_utils.region_2d_to_location_3d(context.region, rv3d, start, pivot)
-            end = view3d_utils.region_2d_to_location_3d(context.region, rv3d, mouse, pivot)
+            begin = self._preview_unproject(context,start,pivot)
+            end = self._preview_unproject(context,mouse,pivot)
             delta = end - begin
             if axis is not None:
                 # Recover world-axis displacement from its visible screen projection.
-                p = view3d_utils.location_3d_to_region_2d(context.region,rv3d,pivot)
-                q = view3d_utils.location_3d_to_region_2d(context.region,rv3d,pivot + axis)
+                p = self._preview_project(context,pivot)
+                q = self._preview_project(context,pivot+axis)
                 projected = q-p if p is not None and q is not None else Vector((0,0))
                 amount = (mouse-start).dot(projected) / projected.length_squared if projected.length_squared > 1 else delta.dot(axis)
                 delta = axis * amount
@@ -106,7 +117,7 @@ class SectionPreviewMixin:
                 targets[i] = pivot + relative
         else:
             axis = axis if axis is not None else rv3d.view_rotation @ Vector((0,0,1))
-            center = view3d_utils.location_3d_to_region_2d(context.region,rv3d,pivot)
+            center = self._preview_project(context,pivot)
             a, b = (start-center, mouse-center) if center is not None else (Vector(),Vector())
             angle = math.atan2(a.x*b.y-a.y*b.x,a.dot(b)) if a.length > 8 and b.length > 8 else (mouse.x-start.x)*0.01
             rotation = Quaternion(axis,angle)
@@ -139,7 +150,7 @@ class SectionPreviewMixin:
             self._preview_state = state
             return
         world = self._preview_state['base']
-        targets = {i:view3d_utils.region_2d_to_location_3d(context.region,context.space_data.region_3d,p,world[i])
+        targets = {i:self._preview_unproject(context,p,world[i])
                    for i,p in zip(order,samples)}
         self._preview_write(context,targets)
         self._preview_finish_edit(context)
@@ -153,7 +164,7 @@ class SectionPreviewMixin:
             self._smooth_brush_radius = max(20,min(240,self._smooth_brush_radius + sign*10))
 
     def _preview_event(self, context, event, in_panels):
-        if not self.detached or not self.preview_only:
+        if not self._third_editing and (not self.detached or not self.preview_only):
             return None
         state = self._preview_state
         if in_panels and state is None:
@@ -224,7 +235,7 @@ class SectionPreviewMixin:
                     moved = _hp_brush_repel_2d([points[i] for i in visible],mouse,mouse-state['previous'],
                                               self._smooth_brush_radius,self._smooth_brush_strength)
                     state['previous'] = mouse.copy()
-                    targets = {i:view3d_utils.region_2d_to_location_3d(context.region,context.space_data.region_3d,p,
+                    targets = {i:self._preview_unproject(context,p,
                                self._obj.matrix_world @ self._bm.verts[self._ordered[i]].co)
                                for i,p in zip(visible,moved) if i in self._selected}
                     self._preview_write(context,targets)
@@ -270,11 +281,12 @@ class SectionPreviewMixin:
         return {'RUNNING_MODAL'}
 
     def _draw_preview_hud(self):
-        if not self.detached or not self.preview_only:
+        if not self._third_editing and (not self.detached or not self.preview_only):
             return
         blf.size(0,13)
         blf.color(0,.85,.9,1,1)
-        blf.position(0,24,bpy.context.region.height-70,0)
+        x,y,w,h=self._third_panel.rect if self._third_editing else (0,0,0,bpy.context.region.height)
+        blf.position(0,x+10,y+12 if self._third_editing else h-70,0)
         blf.draw(0,'3D: Click / Shift+Click / Box | G S R + X Y Z | E Brush | F Pen | Ctrl+Z')
         state = self._preview_state
         if state is None:

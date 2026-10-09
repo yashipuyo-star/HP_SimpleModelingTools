@@ -126,10 +126,6 @@ class MonitorPlacementTests(unittest.TestCase):
         with patch.object(placement,'snapshot_windows',return_value=after), patch.object(placement,'_windows_api',return_value=(native,None,lambda cb:cb,Info)):
             self.assertEqual(placement.move_new_window(before),'moved')
         native.SetWindowPos.assert_called_once_with(2,None,-1888,32,1400,800,0x14)
-        native.SetWindowPos.reset_mock()
-        with patch.object(placement,'snapshot_windows',return_value=after), patch.object(placement,'_windows_api',return_value=(native,None,lambda cb:cb,Info)):
-            self.assertEqual(placement.move_new_window(before,companion=True),'moved')
-        native.SetWindowPos.assert_called_once_with(2,None,1256,24,640,420,0x14)
 
     def test_ambiguous_native_window_identity_never_moves_a_window(self):
         before=dict(handles={1:(0,0,100,100)},source=(0,0,100,100))
@@ -242,7 +238,8 @@ class EditorTests(unittest.TestCase):
         editor=self.open_inline()
         context=SimpleNamespace(region=self.region,area=SimpleNamespace(regions=[]))
         editor._layout_panels(context)
-        self.assertEqual((editor._panel_x,editor._panel_y),(18,18))
+        self.assertEqual(editor._panel_x,18)
+        self.assertEqual(editor._panel_y,min(160,self.region.height*.2))
         hud=SimpleNamespace(type='HUD',width=300,height=220,
                             x=self.region.x,y=self.region.y)
         context.area.regions=[hud]
@@ -251,7 +248,34 @@ class EditorTests(unittest.TestCase):
         self.assertLessEqual(editor._panel_y+editor._panel_h,self.region.height)
         hud.height=100
         editor._layout_panels(context)
-        self.assertEqual(editor._panel_y,112)
+        self.assertEqual(editor._panel_y,min(160,self.region.height*.2))
+
+    def test_third_panel_projection_selection_and_independent_navigation(self):
+        editor=self.open_inline()
+        third=editor._third_panel
+        original=self.area.spaces.active.region_3d.view_rotation.copy()
+        world=editor._obj.matrix_world @ editor._bm.verts[editor._ordered[0]].co
+        point=third.project(world)
+        self.assertLess((third.unproject(point,world)-world).length,1e-5)
+        x,y,w,h=third.rect
+        third.event(editor,bpy.context,event('NUMPAD_3',x=x+w/2,y=y+h/2))
+        self.assertLess(original.rotation_difference(self.area.spaces.active.region_3d.view_rotation).angle,1e-5)
+        third.event(editor,bpy.context,event('NUMPAD_7',x=x+w/2,y=y+h/2))
+        point=third.project(world)
+        editor._selected=set()
+        self.assertEqual(third.event(editor,bpy.context,event('LEFTMOUSE',x=point.x,y=point.y)),{'RUNNING_MODAL'})
+        self.assertIn(0,editor._selected)
+        before=editor._bm.verts[editor._ordered[0]].co.copy()
+        third.event(editor,bpy.context,event('MOUSEMOVE',x=point.x+20,y=point.y+12))
+        self.assertGreater((editor._bm.verts[editor._ordered[0]].co-before).length,.01)
+        third.event(editor,bpy.context,event('RIGHTMOUSE',x=point.x,y=point.y))
+        self.assertLess((editor._bm.verts[editor._ordered[0]].co-before).length,1e-6)
+        self.assertIsNone(editor._preview_state)
+        self.assertFalse(editor._third_editing)
+        for perspective in (True,False):
+            third.perspective=perspective
+            point=third.project(world)
+            self.assertLess((third.unproject(point,world)-world).length,1e-4)
 
     def test_brush_cancel_restores_vertices_and_history(self):
         editor = self.open_inline()
@@ -417,8 +441,7 @@ class EditorTests(unittest.TestCase):
         self.assertEqual(len(detached._history),1)
         self.assertEqual(bpy.ops.hp.section_window(),{'FINISHED'})
         self.assertEqual(section._ACTIVE_SECTION_EDITOR._owner_window_ptr,owner)
-        self.assertEqual(len(bpy.context.window_manager.windows),len(windows_before)+2)
-        companion_window=detached._companion.window
+        self.assertEqual(len(bpy.context.window_manager.windows),len(windows_before)+1)
         window,area,region=section._view_context(owner,detached._owner_area_ptr)
         with bpy.context.temp_override(window=window,area=area,region=region):
             self.assertEqual(bpy.ops.hp.section_inline(),{'FINISHED'})
@@ -430,8 +453,6 @@ class EditorTests(unittest.TestCase):
         # Deferred native close runs in the real event loop; finish this test's
         # duplicate explicitly to avoid retaining a window across other tests.
         with bpy.context.temp_override(window=window):
-            bpy.ops.wm.window_close()
-        with bpy.context.temp_override(window=companion_window):
             bpy.ops.wm.window_close()
 
     def test_close_detached_schedules_its_owned_window_for_closing(self):
@@ -475,10 +496,6 @@ class EditorTests(unittest.TestCase):
         before=len(bpy.context.window_manager.windows)
         self.assertEqual(bpy.ops.hp.section_window(full_scene=True),{'FINISHED'})
         full=section._ACTIVE_SECTION_EDITOR
-        companion=section._ensure_companion(full)
-        self.assertTrue(companion.chain_only)
-        companion_window,companion_area,companion_region=companion.context()
-        self.assertFalse(companion_area.spaces.active.show_object_viewport_mesh)
         owner=full._owner_window_ptr
         window,area,region=section._view_context(owner,full._owner_area_ptr)
         with bpy.context.temp_override(window=window,area=area,region=region):
@@ -497,10 +514,6 @@ class EditorTests(unittest.TestCase):
             self.assertEqual(bpy.ops.hp.section_window(full_scene=False),{'FINISHED'})
             limited=section._ACTIVE_SECTION_EDITOR
             self.assertTrue(limited.preview_only)
-            self.assertIs(limited._companion,companion)
-            self.assertFalse(companion.chain_only)
-            self.assertTrue(companion_area.spaces.active.show_object_viewport_mesh)
-            companion_area.spaces.active.region_3d.view_distance=17
             self.assertEqual(rv3d.view_perspective,'PERSP')
             self.assertEqual(limited._owner_window_ptr,owner)
             self.assertFalse(area.spaces.active.show_object_viewport_mesh)
@@ -509,14 +522,11 @@ class EditorTests(unittest.TestCase):
             self.assertFalse(restored.preview_only)
             self.assertEqual(rv3d.view_perspective,'ORTHO')
             self.assertEqual(restored._selected,{0,2})
-            self.assertTrue(companion.chain_only)
-            self.assertEqual(len(bpy.context.window_manager.windows),before+2)
+            self.assertEqual(len(bpy.context.window_manager.windows),before+1)
             self.assertTrue(area.spaces.active.show_object_viewport_mesh)
             self.assertLess((rv3d.view_location-location).length,1e-5)
             self.assertAlmostEqual(rv3d.view_distance,distance,places=5)
             restored._finish(bpy.context,release_workspace=True)
-            bpy.ops.wm.window_close()
-        with bpy.context.temp_override(window=companion_window):
             bpy.ops.wm.window_close()
         view.view_perspective=old_perspective
 
@@ -569,32 +579,40 @@ def run():
             with bpy.context.temp_override(window=bpy.context.window_manager.windows[0]):
                 addon.unregister()
                 bpy.ops.wm.quit_blender()
-        # Exercise actual deferred companion creation, mode swap and pair cleanup.
         home=bpy.context.window_manager.windows[0]
         area=next(a for a in home.screen.areas if a.type=='VIEW_3D')
         region=next(r for r in area.regions if r.type=='WINDOW')
         with bpy.context.temp_override(window=home,area=area,region=region):
             make_ring()
-            assert bpy.ops.hp.section_window() == {'FINISHED'}
-        def check_pair():
+            image=bpy.data.images.new('Third panel reference',width=2,height=2)
+            image.pixels[:]=[1,.2,.1,1]*4
+            reference=bpy.data.objects.new('Reference image',None)
+            bpy.context.collection.objects.link(reference)
+            reference.empty_display_type='IMAGE'
+            reference.data=image
+            assert bpy.ops.hp.section_window()=={'FINISHED'}
+        def check_render():
             try:
                 editor=section._ACTIVE_SECTION_EDITOR
-                companion=editor._companion
-                assert companion is not None and companion.context() is not None
-                assert not companion.chain_only and len(bpy.context.window_manager.windows)==3
+                assert editor._third_panel.offscreen is not None
+                assert editor._third_panel.scene_rendered
+                assert not editor._third_rendering
                 target=section._view_context(editor._owner_window_ptr,editor._owner_area_ptr)
                 with bpy.context.temp_override(window=target[0],area=target[1],region=target[2]):
+                    third=editor._third_panel
                     assert bpy.ops.hp.section_window(full_scene=True)=={'FINISHED'}
-                    assert section._ACTIVE_SECTION_EDITOR._companion is companion
-                    assert companion.chain_only
+                    assert section._ACTIVE_SECTION_EDITOR._third_panel is third
+                    assert len(bpy.context.window_manager.windows)==2
                     assert bpy.ops.hp.section_inline()=={'FINISHED'}
-                print('PASS: automatic complementary window, mode swap and inline cleanup',flush=True)
+                    assert section._ACTIVE_SECTION_EDITOR._third_panel is third
+                    assert bpy.ops.hp.section_close()=={'FINISHED'}
+                print('PASS: third-panel GPU scene rendering and mode switching without extra windows',flush=True)
                 bpy.app.timers.register(finish,first_interval=.3)
             except Exception:
                 import traceback
                 traceback.print_exc()
                 os._exit(1)
-        bpy.app.timers.register(check_pair,first_interval=.7)
+        bpy.app.timers.register(check_render,first_interval=.8)
 
 if bpy.app.background:
     run()

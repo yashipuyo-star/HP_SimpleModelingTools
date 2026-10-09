@@ -1,7 +1,7 @@
 bl_info = {
     "name": "HP Simple Modeling Tools",
     "author": "OpenAI + yashi",
-    "version": (0, 27, 4),
+    "version": (0, 27, 5),
     "blender": (4, 3, 0),
     "location": "3D View",
     "description": "HP curve path drawing, scalp paths, stroke fit, and mini editors.",

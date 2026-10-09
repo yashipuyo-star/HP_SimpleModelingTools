@@ -1,4 +1,16 @@
-HP Simple Modeling Tools / Path Pen v0.27.4
+HP Simple Modeling Tools / Path Pen v0.27.5
+
+SECTION WINDOW UPDATE v0.27.5
+- The extra companion OS window is replaced by embedded 3D panel C.
+- A/B/C align horizontally in wide views; C sits above B in narrower views.
+- C shows section-only normally/full-scene mode, and scene in detached section mode.
+- C shares the grid, blue points/lines, orange selected markers and point numbers.
+- C: numpad 1/3/7 direction, 5 projection; Home/numpad decimal frames the section.
+  MMB orbit, Shift+MMB pan, Ctrl+MMB/wheel zoom. Main viewport camera is independent.
+- C supports shared click/box selection, dragging, G/S/R, E brush, F pen and undo.
+- C scene is a simplified face/edge and image-empty preview, without materials,
+  lighting or every native Blender overlay. The main native scene view is retained.
+- Inline panels reserve bottom-left redo space and avoid exposed expanded HUD bounds.
 
 SECTION WINDOW UPDATE v0.27.4
 - Inline panels anchor bottom-left and move above Blender's expanded redo HUD.

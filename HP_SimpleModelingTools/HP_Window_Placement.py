@@ -73,7 +73,7 @@ def snapshot_windows():
         return None
 
 
-def move_new_window(snapshot, companion=False):
+def move_new_window(snapshot):
     """Return moved/no_other_monitor/pending/unavailable; never guess an HWND."""
     if snapshot is None or snapshot['source'] is None:
         return 'unavailable'
@@ -95,12 +95,7 @@ def move_new_window(snapshot, companion=False):
                 work.append(_rect_tuple(info.rcWork))
             return True
         api.EnumDisplayMonitors(None,None,collect,0)
-        if companion and work:
-            rect=snapshot['source']
-            cx,cy=(rect[0]+rect[2])/2,(rect[1]+rect[3])/2
-            target=min(work,key=lambda r:max(r[0]-cx,0,cx-r[2])**2+max(r[1]-cy,0,cy-r[3])**2)
-        else:
-            target=choose_other_monitor(work,snapshot['source'])
+        target=choose_other_monitor(work,snapshot['source'])
         if target is None:
             return 'no_other_monitor'
         # Confirm the candidate still belongs to this Blender process.
@@ -109,11 +104,6 @@ def move_new_window(snapshot, companion=False):
         if pid.value != os.getpid():
             return 'unavailable'
         x,y,width,height=placement_in_work_area(target,current['handles'][hwnd])
-        if companion:
-            width=min(640,width)
-            height=min(420,height)
-            x=max(target[0],target[2]-width-24)
-            y=target[1]+24
         return 'moved' if api.SetWindowPos(hwnd,None,x,y,width,height,0x0004 | 0x0010) else 'unavailable'
     except (AttributeError,OSError,ValueError):
         return 'unavailable'
@@ -134,17 +124,3 @@ def schedule_other_monitor(snapshot, still_owned):
             print('[HP Section] Automatic monitor placement was unavailable; the window can be moved manually.')
         return None
     bpy.app.timers.register(move,first_interval=0.1)
-
-
-def schedule_companion(snapshot, still_owned):
-    import bpy
-    attempts=0
-    def resize():
-        nonlocal attempts
-        if not still_owned():
-            return None
-        result=move_new_window(snapshot,companion=True)
-        attempts+=1
-        return .1 if result=='pending' and attempts<10 else None
-    if snapshot is not None:
-        bpy.app.timers.register(resize,first_interval=.1)
