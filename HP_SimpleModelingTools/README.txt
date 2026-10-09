@@ -1,4 +1,13 @@
-HP Simple Modeling Tools / Path Pen v0.27.3
+HP Simple Modeling Tools / Path Pen v0.27.4
+
+SECTION WINDOW UPDATE v0.27.4
+- Inline panels anchor bottom-left and move above Blender's expanded redo HUD.
+- Detached editor opens an additional complementary 3D-only window: full scene
+  when main is section-only, section-only when main is full scene.
+- Companion supports native numpad/orbit/pan/zoom; section-only is a visual aid.
+- Mode switches reuse the companion and restore its full-scene camera.
+- Windows companion starts on the foreground monitor at up to 640x420, top-right.
+- Inline mode and editor close clean up both detached windows.
 
 SECTION WINDOW UPDATE v0.27.3
 - Right-click > HP 断面エディター now offers detached "断面のみ" and "シーン全体".

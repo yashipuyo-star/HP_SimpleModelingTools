@@ -2,7 +2,7 @@
 bl_info = {
     "name": "HP Section Mini Editor",
     "author": "OpenAI + yashi",
-    "version": (0, 27, 3),
+    "version": (0, 27, 4),
     "blender": (4, 3, 0),
     "location": "3D View > Sidebar > HP Tools",
     "description": "Two fully interactive section views with translucent world-plane editing.",
@@ -1857,8 +1857,17 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
         wanted_w, wanted_h = self._panel_sizes[self._panel_stage]
         width = max(160, min(wanted_w, (context.region.width - 48) / 2))
         height = max(140, min(wanted_h, context.region.height * (0.42 if self.detached else 0.48)))
-        x = 18 if self.detached else max(18, context.region.width - width * 2 - 30)
-        y = 18 if self.detached else max(18, context.region.height - height - 18)
+        x, y = 18, 18
+        if not self.detached:
+            # Blender's redo popup is a HUD region, including its expanded size.
+            for region in context.area.regions:
+                if region.type == 'HUD' and region.width > 0 and region.height > 0:
+                    left = region.x - context.region.x
+                    bottom = region.y - context.region.y
+                    if left < x + width * 2 + 12 and left + region.width > x:
+                        y = max(y, bottom + region.height + 12)
+            height = min(height, max(60, context.region.height - y - 18))
+            y = min(y, max(18, context.region.height - height - 18))
         layout = (width, height, x, y)
         if layout != (self._panel_w, self._panel_h, self._panel_x, self._panel_y):
             self._panel_w, self._panel_h, self._panel_x, self._panel_y = layout
@@ -1896,6 +1905,7 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
         )
 
         self._finished = False
+        self._companion = None
         self._viewport_navigation_active = False
         self._direct_follow_state = None
         self._hp_visual_spans = [[], []]
@@ -6355,6 +6365,9 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
                         self._frame_preview(context)
                 else:
                     self._sync_primary_from_mesh()
+            companion=getattr(self,'_companion',None)
+            if companion is not None and companion.chain_only and getattr(companion,'signature',None) != (self._obj,self._signature):
+                companion.configure(self)
             self._tag_views(context)
         if self._idle or not self._target_available(context):
             if event.type == 'ESC' and event.value == 'PRESS':
@@ -7834,7 +7847,7 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
         try:
             gpu.state.depth_test_set('NONE')
             shader.bind()
-            if self.detached and self.preview_only and owner:
+            if (self.detached and self.preview_only and owner) or (getattr(self,'_companion',None) is not None and self._companion.is_chain_view(context)):
                 shader.uniform_float('color', (0.3, 0.7, 1.0, 1.0))
                 gpu.state.point_size_set(5.0)
                 batch_for_shader(shader, 'POINTS', {'pos': positions}).draw(shader)
@@ -8669,6 +8682,10 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
         if getattr(self, '_preview_state', None):
             self._preview_finish_edit(context, cancel=True)
         self._finished = True
+        companion = getattr(self, '_companion', None)
+        self._companion = None
+        if companion is not None:
+            companion.close()
 
         labels = getattr(self, '_handle_labels', None)
         self._handle_labels = None
@@ -8756,6 +8773,8 @@ def _section_preferences(context):
 
 
 def _session_after_finish(editor, context):
+    companion = getattr(editor,'_companion',None)
+    editor._companion = None
     editor._finish(context, release_workspace=True)
     fields = ('_selected', '_hp_settings', '_history', '_topology_undo_steps',
               '_topology_selection_history', '_primary_view', '_secondary_view',
@@ -8765,13 +8784,20 @@ def _session_after_finish(editor, context):
               '_pen_stabilizer', '_secondary_pen_stabilizer',
               '_smooth_brush_radius', '_smooth_brush_strength', '_flip_x', '_flip_y',
               '_secondary_flip_y', '_secondary_plane')
-    return dict(obj=editor._obj, signature=editor._signature,
+    return dict(companion=companion, obj=editor._obj, signature=editor._signature,
                 values={key:copy.copy(getattr(editor,key)) for key in fields})
 
 
 def _restore_session(editor, session, context):
     if session is None or editor is None:
         return
+    companion = session.get('companion')
+    if companion is not None:
+        if editor.detached:
+            editor._companion = companion
+            companion.configure(editor)
+        else:
+            companion.close()
     same_target = editor._obj == session['obj'] and editor._signature == session['signature']
     target_fields = {'_selected','_history','_topology_undo_steps','_topology_selection_history'}
     for key,value in session['values'].items():
@@ -8799,6 +8825,88 @@ def _close_owned_window_later(window_ptr):
                 bpy.ops.wm.window_close()
         return None
     bpy.app.timers.register(close, first_interval=0.1)
+
+
+class _SectionCompanion:
+    """Native independent camera; section drawing comes from the single editor."""
+    def __init__(self, window, area):
+        self.window = window
+        self.window_ptr = window.as_pointer()
+        self.area_ptr = area.as_pointer()
+        self.backup = None
+        self.chain_only = False
+
+    def context(self):
+        try:
+            if self.window not in bpy.context.window_manager.windows[:]:
+                return None
+            return _view_context(self.window_ptr,self.area_ptr)
+        except ReferenceError:
+            return None
+
+    def is_chain_view(self, context):
+        return self.chain_only and context.window.as_pointer() == self.window_ptr and context.area.as_pointer() == self.area_ptr
+
+    def configure(self, editor):
+        target = self.context()
+        if target is None:
+            return
+        space = target[1].spaces.active
+        if self.backup is not None:
+            for key,value in self.backup['filters'].items():
+                setattr(space,key,value)
+            space.overlay.show_overlays = self.backup['overlays']
+            for key,value in self.backup['camera'].items():
+                setattr(space.region_3d,key,value)
+            self.backup = None
+        self.signature=(editor._obj,editor._signature)
+        self.chain_only = not editor.preview_only
+        if self.chain_only:
+            filters = {p.identifier:getattr(space,p.identifier) for p in space.bl_rna.properties
+                       if p.identifier.startswith('show_object_viewport_')}
+            self.backup = dict(filters=filters,overlays=space.overlay.show_overlays,
+                camera={key:copy.copy(getattr(space.region_3d,key)) for key in
+                        ('view_location','view_rotation','view_distance','view_perspective')})
+            for key in filters:
+                setattr(space,key,False)
+            space.overlay.show_overlays = False
+            if not editor._idle and editor._target_available(bpy.context):
+                points=[editor._obj.matrix_world @ editor._bm.verts[i].co for i in editor._ordered]
+                center=sum(points,Vector())/len(points)
+                space.region_3d.view_location=center
+                space.region_3d.view_distance=max(.1,max((p-center).length for p in points)*3)
+                space.region_3d.view_perspective='PERSP'
+        space.region_3d.update()
+        target[1].tag_redraw()
+
+    def close(self):
+        if self.context() is not None:
+            _close_owned_window_later(self.window_ptr)
+
+
+def _ensure_companion(editor):
+    existing = getattr(editor,'_companion',None)
+    if existing is not None and existing.context() is not None:
+        return existing
+    home = _view_context(getattr(editor,'_home_window_ptr',0),getattr(editor,'_home_area_ptr',0))
+    if home is None:
+        return None
+    previous={w.as_pointer() for w in bpy.context.window_manager.windows}
+    native=HP_Window_Placement.snapshot_windows()
+    with bpy.context.temp_override(window=home[0],area=home[1],region=home[2]):
+        if bpy.ops.screen.area_dupli('INVOKE_DEFAULT') != {'FINISHED'}:
+            return None
+    window=next((w for w in bpy.context.window_manager.windows if w.as_pointer() not in previous),None)
+    if window is None:
+        return None
+    area=next(a for a in window.screen.areas if a.type=='VIEW_3D')
+    area.spaces.active.show_region_ui=False
+    area.spaces.active.show_region_toolbar=False
+    companion=_SectionCompanion(window,area)
+    editor._companion=companion
+    companion.configure(editor)
+    HP_Window_Placement.schedule_companion(native,lambda: companion.context() is not None)
+    return companion
 
 
 class HP_OT_section_inline(bpy.types.Operator):
@@ -8849,6 +8957,7 @@ class HP_OT_section_window(bpy.types.Operator):
             target = _view_context(editor._owner_window_ptr,editor._owner_area_ptr)
             if target is not None:
                 if editor.preview_only == (not self.full_scene):
+                    _ensure_companion(editor)
                     return {'FINISHED'}
                 home = (getattr(editor,'_home_window_ptr',0),getattr(editor,'_home_area_ptr',0))
                 session = _session_after_finish(editor,context)
@@ -8858,6 +8967,8 @@ class HP_OT_section_window(bpy.types.Operator):
                         new = _ACTIVE_SECTION_EDITOR
                         new._home_window_ptr,new._home_area_ptr = home
                         _restore_session(new,session,bpy.context)
+                        if new._companion is None:
+                            _ensure_companion(new)
                 return {'FINISHED'} if result == {'RUNNING_MODAL'} else {'CANCELLED'}
             editor._finish(context,release_workspace=True)
             editor = None
@@ -8891,6 +9002,14 @@ class HP_OT_section_window(bpy.types.Operator):
             HP_Window_Placement.schedule_other_monitor(native,
                 lambda: _ACTIVE_SECTION_EDITOR is not None and _ACTIVE_SECTION_EDITOR.detached
                 and _ACTIVE_SECTION_EDITOR._owner_window_ptr == owner)
+        if result == {'RUNNING_MODAL'}:
+            # Wait for native main-window placement before creating another HWND.
+            active = _ACTIVE_SECTION_EDITOR
+            def open_companion():
+                if _ACTIVE_SECTION_EDITOR is active and not active._finished:
+                    _ensure_companion(active)
+                return None
+            bpy.app.timers.register(open_companion, first_interval=0.4)
         return {'FINISHED'} if result == {'RUNNING_MODAL'} else {'CANCELLED'}
 
 
