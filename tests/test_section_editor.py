@@ -339,6 +339,30 @@ class EditorTests(unittest.TestCase):
             detached._finish(bpy.context,release_workspace=True)
             bpy.ops.wm.window_close()
 
+    def test_third_hides_with_other_panels_and_does_not_capture_input(self):
+        editor=self.open_inline()
+        third=editor._third_panel
+        text=SimpleNamespace(size=Mock(),color=Mock(),position=Mock(),draw=Mock())
+        with patch.object(third,'draw') as draw, patch.object(section,'blf',text):
+            editor._idle=True
+            editor._draw()
+            draw.assert_not_called()
+            self.assertFalse(third.visible(editor,bpy.context))
+            x,y,w,h=third.rect
+            third.navigation=Vector((x,y))
+            self.assertIsNone(third.event(editor,bpy.context,event('LEFTMOUSE',x=x+w/2,y=y+h/2)))
+            self.assertIsNone(third.navigation)
+            editor._idle=False
+            bpy.ops.object.mode_set(mode='OBJECT')
+            editor._draw()
+            draw.assert_not_called()
+            self.assertFalse(third.visible(editor,bpy.context))
+            bpy.ops.object.mode_set(mode='EDIT')
+            editor._modal_impl(bpy.context,event('TIMER'))
+            self.assertTrue(third.visible(editor,bpy.context))
+        editor._finish(bpy.context,release_workspace=True)
+        self.assertFalse(third.visible(editor,bpy.context))
+
     def test_brush_cancel_restores_vertices_and_history(self):
         editor = self.open_inline()
         editor._selected = set(range(8))

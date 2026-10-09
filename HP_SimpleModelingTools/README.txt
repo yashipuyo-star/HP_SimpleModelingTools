@@ -1,4 +1,9 @@
-HP Simple Modeling Tools / Path Pen v0.27.7
+HP Simple Modeling Tools / Path Pen v0.27.8
+
+SECTION WINDOW UPDATE v0.27.8
+- C uses the same target/idle visibility condition as A/B. Clearing selection
+  or entering object mode hides all three; target reselection restores them.
+- Hidden C does not capture mouse/button input or retain navigation gestures.
 
 SECTION WINDOW UPDATE v0.27.7
 - C Scene/Section buttons invoke the right-click window mode switch: C Scene

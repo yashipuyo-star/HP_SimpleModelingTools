@@ -2,7 +2,7 @@
 bl_info = {
     "name": "HP Section Mini Editor",
     "author": "OpenAI + yashi",
-    "version": (0, 27, 7),
+    "version": (0, 27, 8),
     "blender": (4, 3, 0),
     "location": "3D View > Sidebar > HP Tools",
     "description": "Two fully interactive section views with translucent world-plane editing.",
@@ -8422,7 +8422,6 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
         ):
             return
 
-        self._third_panel.draw(self,bpy.context)
         if self._idle or not self._target_available(bpy.context):
             blf.size(0, 16)
             blf.color(0, 0.8, 0.9, 1.0, 1.0)
@@ -8430,6 +8429,7 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
             blf.draw(0, "HP Section: select a connected edge loop in the main view")
             return
 
+        self._third_panel.draw(self,bpy.context)
         gpu.state.blend_set('ALPHA')
 
         if not self._third_editing:

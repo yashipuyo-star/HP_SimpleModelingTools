@@ -94,7 +94,14 @@ class ThirdPanel:
         left,bottom,w,h=self.rect
         return left<=x<=left+w and bottom<=y<=bottom+h
 
+    def visible(self, editor, context):
+        return not editor._finished and not editor._idle and editor._target_available(context)
+
     def event(self,editor,context,event):
+        if not self.visible(editor,context):
+            self.navigation=None
+            self.button_pressed=False
+            return None
         mouse=Vector((event.mouse_region_x,event.mouse_region_y))
         if self.button_pressed and event.type=='LEFTMOUSE' and event.value=='RELEASE':
             self.button_pressed=False
@@ -158,6 +165,8 @@ class ThirdPanel:
             editor._third_editing=editor._preview_state is not None
 
     def draw(self,editor,context):
+        if not self.visible(editor,context):
+            return
         x,y,w,h=self.rect
         viewport=gpu.state.viewport_get()
         gpu.state.scissor_set(viewport[0]+int(x),viewport[1]+int(y),int(w),int(h))

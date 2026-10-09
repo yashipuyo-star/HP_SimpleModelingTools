@@ -1,17 +1,19 @@
-# HP Simple Modeling Tools v0.27.7
+# HP Simple Modeling Tools v0.27.8
 
 Blender 4.3 以降向けアドオン。元の v0.26.29 ZIP はそのまま残しています。
 
 ## インストール
 
 Blender の「プリファレンス → アドオン → ディスクからインストール」で
-`HP_SimpleModelingTools_PathPen_v0.27.7_SectionWindow.zip` を選択してください。
+`HP_SimpleModelingTools_PathPen_v0.27.8_SectionWindow.zip` を選択してください。
 既存の HP Simple Modeling Tools と旧単体版を無効化し、更新後に Blender を再起動してください。
 ZIP 内の個別 `.py` はインストールしないでください。
 
 ## 断面エディター
 
 A/B に加えて、同じビュー内に独立した3Dパネル **C** を表示します。
+選択解除やオブジェクトモードへの移行で A/B が非表示になると、C も非表示になり、操作を受け付けません。
+再び対象を選択すると A/B/C が一緒に戻ります。
 小さな補助用の別ウィンドウは作りません。広いビューでは A/B/C を横並びにし、
 狭いビューでは C を B の上に配置します。
 ビュー内のパネルは左下を基準に、操作設定用の余白を取って配置します。
