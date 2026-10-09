@@ -2,7 +2,7 @@
 bl_info = {
     "name": "HP Section Mini Editor",
     "author": "OpenAI + yashi",
-    "version": (0, 27, 8),
+    "version": (0, 27, 9),
     "blender": (4, 3, 0),
     "location": "3D View > Sidebar > HP Tools",
     "description": "Two fully interactive section views with translucent world-plane editing.",
@@ -1853,7 +1853,7 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
     preview_only: BoolProperty(default=True, options={'SKIP_SAVE'})
 
     def _layout_panels(self, context):
-        if self._preview_state or self._dragging or self._secondary_dragging or self._brush_mode or self._pen_drawing or self._secondary_pen_drawing or self._transform_mode or self._secondary_transform_mode:
+        if self._preview_state or self._dragging or self._secondary_dragging or self._box_dragging or self._secondary_box_dragging or self._resize_mode or self._third_panel.navigation or self._brush_mode or self._pen_drawing or self._secondary_pen_drawing or self._transform_mode or self._secondary_transform_mode:
             return
         wanted_w, wanted_h = self._panel_sizes[self._panel_stage]
         width = max(160, min(wanted_w, (context.region.width - 48) / 2))
@@ -1862,14 +1862,21 @@ class HP_OT_section_mini_editor(SectionPreviewMixin, bpy.types.Operator):
         if (context.region.width >= 1100 or context.region.height < 500):
             width = min(width,(context.region.width-60)/3)
         if not self.detached:
-            y = min(160,context.region.height*.2)
-            # Blender's redo popup is a HUD region, including its expanded size.
+            size=(context.region.width,context.region.height)
+            baseline=min(160,context.region.height*.2)
+            if getattr(self,'_inline_layout_size',None) != size:
+                self._inline_layout_size=size
+                self._inline_clearance=baseline
+            y=max(baseline,self._inline_clearance)
+            # Reserve HUD height independently of its changing width. Keep the
+            # clearance until the viewport is resized so redo updates cannot
+            # make the panels jump down again.
             for region in context.area.regions:
                 if region.type == 'HUD' and region.width > 0 and region.height > 0:
-                    left = region.x - context.region.x
                     bottom = region.y - context.region.y
-                    if left < x + width * 2 + 12 and left + region.width > x:
+                    if bottom < context.region.height*.5:
                         y = max(y, bottom + region.height + 12)
+            self._inline_clearance=y
             height = min(height, max(60, context.region.height - y - 18))
             y = min(y, max(18, context.region.height - height - 18))
         if (context.region.width >= 1100 or context.region.height < 500):

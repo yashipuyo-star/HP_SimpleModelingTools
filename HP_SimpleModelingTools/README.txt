@@ -1,4 +1,10 @@
-HP Simple Modeling Tools / Path Pen v0.27.8
+HP Simple Modeling Tools / Path Pen v0.27.9
+
+SECTION WINDOW UPDATE v0.27.9
+- Inline redo clearance depends on HUD height, not changing HUD width.
+- Reserved clearance persists until viewport resize; shrinking/hiding redo
+  does not make A/B/C jump back down. Taller HUDs still avoid overlap.
+- Layout stays fixed during point/box/resize gestures and C navigation.
 
 SECTION WINDOW UPDATE v0.27.8
 - C uses the same target/idle visibility condition as A/B. Clearing selection

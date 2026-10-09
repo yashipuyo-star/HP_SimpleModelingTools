@@ -248,7 +248,7 @@ class EditorTests(unittest.TestCase):
         self.assertLessEqual(editor._panel_y+editor._panel_h,self.region.height)
         hud.height=100
         editor._layout_panels(context)
-        self.assertEqual(editor._panel_y,min(160,self.region.height*.2))
+        self.assertEqual(editor._panel_y,232)
 
     def test_third_panel_projection_selection_and_independent_navigation(self):
         editor=self.open_inline()
@@ -362,6 +362,27 @@ class EditorTests(unittest.TestCase):
             self.assertTrue(third.visible(editor,bpy.context))
         editor._finish(bpy.context,release_workspace=True)
         self.assertFalse(third.visible(editor,bpy.context))
+
+    def test_redo_width_changes_and_hiding_do_not_move_panels(self):
+        editor=self.open_inline()
+        hud=SimpleNamespace(type='HUD',width=300,height=220,x=self.region.x,y=self.region.y)
+        context=SimpleNamespace(region=self.region,area=SimpleNamespace(regions=[hud]))
+        editor._layout_panels(context)
+        layout=(editor._panel_x,editor._panel_y,editor._panel_w,editor._panel_h,editor._third_panel.rect)
+        for width in (1,700,1200,0,300):
+            hud.width=width
+            editor._layout_panels(context)
+            self.assertEqual((editor._panel_x,editor._panel_y,editor._panel_w,editor._panel_h,editor._third_panel.rect),layout)
+        hud.height=100
+        editor._layout_panels(context)
+        self.assertEqual(editor._panel_y,layout[1])
+        hud.height=300
+        editor._dragging=True
+        editor._layout_panels(context)
+        self.assertEqual(editor._panel_y,layout[1])
+        editor._dragging=False
+        editor._layout_panels(context)
+        self.assertGreaterEqual(editor._panel_y,312)
 
     def test_brush_cancel_restores_vertices_and_history(self):
         editor = self.open_inline()
